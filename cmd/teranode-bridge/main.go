@@ -24,6 +24,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lightwebinc/shard-common/hostinfo"
+	"github.com/lightwebinc/shard-common/logging"
 	"github.com/lightwebinc/shard-common/objfmt"
 	"golang.org/x/sync/errgroup"
 
@@ -31,6 +33,7 @@ import (
 	"github.com/lightwebinc/teranode-bridge/internal/cache"
 	"github.com/lightwebinc/teranode-bridge/internal/hashid"
 	"github.com/lightwebinc/teranode-bridge/internal/lanes"
+	"github.com/lightwebinc/teranode-bridge/internal/metrics"
 	"github.com/lightwebinc/teranode-bridge/internal/registry"
 	"github.com/lightwebinc/teranode-bridge/internal/retrieval"
 	"github.com/lightwebinc/teranode-bridge/internal/reverse"
@@ -83,13 +86,32 @@ func main() {
 		cacheTTL   = flag.Duration("cache-ttl", 10*time.Minute, "how long a pushed object stays fetchable")
 		maxObject  = flag.Int("max-object", 0, "per-object size ceiling (0 = codec default)")
 		statsEvery = flag.Duration("stats-every", time.Minute, "interval between stats lines (0 = off)")
-		logLevel   = flag.String("log-level", "info", "debug|info|warn|error")
+
+		metricsAddr = flag.String("metrics-addr", "[::]:9146", "HTTP listener for /metrics, /healthz, /readyz, /loglevel (empty = off)")
+		logLevel    = flag.String("log-level", "info", "debug|info|warn|error")
+		logFormat   = flag.String("log-format", "text", "log encoding: text (stderr) or json (stdout, the fleet aggregation contract)")
+		debug       = flag.Bool("debug", false, "deprecated alias for -log-level=debug")
+		instanceID  = flag.String("instance-id", "", "service.instance.id for logs and metrics (default: hostname)")
 	)
 	flag.Var(&propagation, "propagation", "propagation HTTP base URL(s), comma-separated, e.g. http://192.0.2.10:20833")
 	flag.Var(&brokers, "kafka", "cluster Kafka broker(s), comma-separated, e.g. 192.0.2.10:19092")
 	flag.Parse()
 
-	log := newLogger(*logLevel)
+	level := logging.ParseLevel(*logLevel)
+	if *debug {
+		level = slog.LevelDebug
+	}
+	levelVar := logging.Init(logging.Options{
+		Service:    metrics.ServiceName,
+		InstanceID: *instanceID,
+		Version:    Version,
+		Level:      level,
+		Format:     logging.ParseFormat(*logFormat),
+	})
+	log := slog.Default()
+	stopSIGHUP := logging.InstallSIGHUPToggle(levelVar, level)
+	defer stopSIGHUP()
+
 	sink := *mode == "sink"
 
 	if !sink {
@@ -146,6 +168,8 @@ func main() {
 			"version", Version)
 	}
 
+	rec := metrics.New(Version, *instanceID)
+
 	laneSet := []*lanes.Lane{
 		{
 			Name: "tx", Class: objfmt.ClassTx, Addr: *txListen, Log: log, MaxObject: *maxObject,
@@ -156,13 +180,13 @@ func main() {
 		{
 			Name: "subtree", Class: objfmt.ClassSubtree, Addr: *subtreeListen, Log: log, MaxObject: *maxObject,
 			Handle: func(ctx context.Context, obj []byte) error {
-				return handleSubtree(ctx, obj, objects, seen, producer, baseURL, log)
+				return handleSubtree(ctx, obj, objects, seen, producer, baseURL, rec, log)
 			},
 		},
 		{
 			Name: "block", Class: objfmt.ClassBlock, Addr: *blockListen, Log: log, MaxObject: *maxObject,
 			Handle: func(ctx context.Context, obj []byte) error {
-				return handleBlock(ctx, obj, objects, seen, producer, baseURL, log)
+				return handleBlock(ctx, obj, objects, seen, producer, baseURL, rec, log)
 			},
 		},
 	}
@@ -198,6 +222,19 @@ func main() {
 			"edge_ingress", *edgeIngress, "submitter", *submitter)
 	}
 
+	// Point the recorder at every live subsystem now that they all exist. Nil
+	// members simply contribute no series, so a sink exposes exactly the lane
+	// and cache metrics and nothing it cannot honestly report.
+	rec.SetSources(metrics.Sources{
+		Lanes: laneSet, Objects: objects, Txs: txs, Seen: seen,
+		Submit: sub, Announce: producer, Retrieval: ret, Reverse: rev,
+		UpTunnels: []*submit.UpTunnel{upSubtree, upBlock},
+	})
+	inv := hostinfo.Gather(metrics.ServiceName, Version)
+	rec.SetHostInfo(inv)
+	rec.SetLevelVar(levelVar)
+	log.Info("host.inventory", "inventory", inv)
+
 	g, gctx := errgroup.WithContext(ctx)
 	for _, ln := range laneSet {
 		g.Go(func() error { return ln.Serve(gctx) })
@@ -208,6 +245,18 @@ func main() {
 	if rev != nil {
 		g.Go(func() error { return rev.Run(gctx) })
 	}
+	if *metricsAddr != "" {
+		g.Go(func() error { return rec.Serve(gctx, *metricsAddr) })
+	}
+	// Ready once every lane is bound: before that the bridge cannot accept
+	// delivery, and whatever gates on /readyz should hold off.
+	g.Go(func() error {
+		if waitLanesBound(gctx, laneSet) {
+			rec.SetReady(true)
+			log.Info("all lanes bound; reporting ready")
+		}
+		return nil
+	})
 	if *statsEvery > 0 {
 		g.Go(func() error {
 			t := time.NewTicker(*statsEvery)
@@ -261,7 +310,7 @@ func handleTx(ctx context.Context, obj []byte, txs *cache.Cache, seen *registry.
 // handleSubtree stores the frame and announces it, pointing the cluster at our
 // retrieval plane.
 func handleSubtree(ctx context.Context, obj []byte, objects *cache.Cache, seen *registry.Registry,
-	producer *announce.Producer, baseURL string, log *slog.Logger) error {
+	producer *announce.Producer, baseURL string, rec *metrics.Recorder, log *slog.Logger) error {
 
 	if len(obj) < objfmt.SubtreeHeaderSize {
 		return fmt.Errorf("subtree frame too short: %d bytes", len(obj))
@@ -274,7 +323,7 @@ func handleSubtree(ctx context.Context, obj []byte, objects *cache.Cache, seen *
 
 	// Store before announcing: the cluster does not retry a failed subtree
 	// fetch, so the object must be servable the instant the announcement lands.
-	verifyEcho(objects, seen, root, "subtree", obj, log)
+	verifyEcho(objects, seen, root, "subtree", obj, rec, log)
 	objects.Put(cache.Key(root), "subtree", obj)
 
 	if dir, known := seen.Mark(registry.Key(root), registry.Delivered); known {
@@ -290,7 +339,7 @@ func handleSubtree(ctx context.Context, obj []byte, objects *cache.Cache, seen *
 
 // handleBlock stores the frame and announces it.
 func handleBlock(ctx context.Context, obj []byte, objects *cache.Cache, seen *registry.Registry,
-	producer *announce.Producer, baseURL string, log *slog.Logger) error {
+	producer *announce.Producer, baseURL string, rec *metrics.Recorder, log *slog.Logger) error {
 
 	if len(obj) < objfmt.BlockPrefixSize {
 		return fmt.Errorf("block frame too short: %d bytes", len(obj))
@@ -299,7 +348,7 @@ func handleBlock(ctx context.Context, obj []byte, objects *cache.Cache, seen *re
 	// chain identifies it.
 	id := hashid.DoubleSHA256(obj[:80])
 
-	verifyEcho(objects, seen, id, "block", obj, log)
+	verifyEcho(objects, seen, id, "block", obj, rec, log)
 	objects.Put(cache.Key(id), "block", obj)
 
 	if dir, known := seen.Mark(registry.Key(id), registry.Delivered); known {
@@ -365,7 +414,9 @@ func logStats(log *slog.Logger, laneSet []*lanes.Lane, objects, txs *cache.Cache
 // what the fabric carried is byte-for-byte what we sent, across encode, submit,
 // reframe, multicast, strip and deliver. A mismatch means the object plane is
 // corrupting data and is worth an error even though the object is then dropped.
-func verifyEcho(objects *cache.Cache, seen *registry.Registry, h hashid.Hash, class string, obj []byte, log *slog.Logger) {
+func verifyEcho(objects *cache.Cache, seen *registry.Registry, h hashid.Hash, class string, obj []byte,
+	rec *metrics.Recorder, log *slog.Logger) {
+
 	dir, known := seen.Lookup(registry.Key(h))
 	if !known || dir != registry.Submitted {
 		return
@@ -375,11 +426,36 @@ func verifyEcho(objects *cache.Cache, seen *registry.Registry, h hashid.Hash, cl
 		return // published before this process started, or aged out
 	}
 	if !bytes.Equal(sent, obj) {
+		rec.EchoMismatch()
 		log.Error("ECHO MISMATCH: the fabric returned different bytes than we published",
 			"class", class, "hash", h.Display(), "sent_bytes", len(sent), "back_bytes", len(obj))
 		return
 	}
+	rec.EchoVerified()
 	log.Info("echo verified byte-identical", "class", class, "hash", h.Display(), "bytes", len(obj))
+}
+
+// waitLanesBound blocks until every lane has its listener open, and reports
+// whether that happened (false means the context was cancelled first).
+func waitLanesBound(ctx context.Context, laneSet []*lanes.Lane) bool {
+	t := time.NewTicker(100 * time.Millisecond)
+	defer t.Stop()
+	for {
+		bound := 0
+		for _, l := range laneSet {
+			if l.Bound() {
+				bound++
+			}
+		}
+		if bound == len(laneSet) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-t.C:
+		}
+	}
 }
 
 // builderFunc adapts the asset client to the reverse path's Builder.
@@ -406,19 +482,4 @@ func nilIfNil(u *submit.UpTunnel) reverse.Publisher {
 		return nil
 	}
 	return u
-}
-
-func newLogger(level string) *slog.Logger {
-	var l slog.Level
-	switch strings.ToLower(level) {
-	case "debug":
-		l = slog.LevelDebug
-	case "warn":
-		l = slog.LevelWarn
-	case "error":
-		l = slog.LevelError
-	default:
-		l = slog.LevelInfo
-	}
-	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: l}))
 }

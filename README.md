@@ -124,19 +124,23 @@ See [docs/configuration.md](docs/configuration.md) for the full flag reference.
 | `9143` | in | subtree lane (BRC-143 push frames) |
 | `9144` | in | block lane (BRC-144 push frames) |
 | `9145` | in | retrieval plane — the cluster's pulls |
+| `9146` | in | `/metrics`, `/healthz`, `/readyz`, `/loglevel` |
 | `8726` | out | BRC-143 subtree submits to the object-plane ingress |
 | `8727` | out | BRC-144 block submits to the object-plane ingress |
 
 ## Observability
 
-Structured `log/slog` output on stdout, with a stats block every `-stats-every`
-(default 60 s): per-lane object/byte/error counts, cache and registry sizes,
-submit outcomes, announcements produced, retrieval hits and misses, reverse-path
-publishes and skips. There is no Prometheus endpoint yet.
+Prometheus metrics on `-metrics-addr` (default `[::]:9146`) under the `btb_`
+prefix, alongside `/healthz`, `/readyz` (ready once every lane is bound) and a
+runtime `POST /loglevel`. Structured `log/slog` output carries the same numbers
+in a stats block every `-stats-every` (default 60 s).
 
-Two lines warrant alerts: `ECHO MISMATCH` (the object plane returned different
-bytes than were published — a data-integrity fault) and
-`lane framing error, dropping connection`.
+The alert that matters is **`btb_echo_mismatch_total`** (log line
+`ECHO MISMATCH`): non-zero means the object plane returned different bytes than
+were published — a data-integrity fault, not a delivery hiccup. Worth watching
+too: `btb_lane_connections_dropped_total` (framing faults),
+`btb_announce_failures_total`, and `btb_retrieval_misses_total` climbing against
+a flat `btb_cache_evicted_total`.
 
 ## Container image
 

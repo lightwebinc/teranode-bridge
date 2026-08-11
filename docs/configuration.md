@@ -129,7 +129,30 @@ fixed at a 30-minute TTL and 2²⁰ entries; it is not currently configurable.
 | --- | --- | --- |
 | `-mode` | `all` | `all` = full bridge. `sink` = receive, parse, verify and count only, with no cluster targets. |
 | `-stats-every` | `1m` | Interval between stats blocks. `0` disables periodic stats (a final block is still emitted at shutdown). |
-| `-log-level` | `info` | `debug` \| `info` \| `warn` \| `error`. Output is `log/slog` text on stdout. |
+| `-metrics-addr` | `[::]:9146` | HTTP listener for `/metrics`, `/healthz`, `/readyz`, `/loglevel`. Empty disables it. |
+| `-log-level` | `info` | `debug` \| `info` \| `warn` \| `error`. Runtime-changeable via `POST /loglevel` and `SIGHUP`. |
+| `-log-format` | `text` | `text` (stderr) or `json` (stdout — the fleet aggregation contract). |
+| `-instance-id` | hostname | `service.instance.id` shared by logs and metrics, so the two join. |
+| `-debug` | `false` | Deprecated alias for `-log-level=debug`. |
+
+> **Why `text` is the default here** and `json` elsewhere in the stack: the
+> integration demo parses this binary's log lines with anchored regexes. Set
+> `-log-format json` for any deployment that ships to log aggregation.
+
+### Observability endpoints
+
+| Route | Answer |
+| --- | --- |
+| `GET /metrics` | Prometheus exposition, `btb_` prefix |
+| `GET /healthz` | always `200` |
+| `GET /readyz` | `200` once every lane is bound, `503` before |
+| `POST /loglevel` | runtime log-level change |
+
+Metrics are read from the same counters the stats lines report, so the two never
+disagree. The one to alert on is **`btb_echo_mismatch_total`** — non-zero means
+the object plane returned different bytes than were published. Series are present
+at zero from startup, so `== 0` is a valid alert expression immediately after a
+restart.
 
 `-mode sink` skips the propagation submitter, the Kafka producer, the retrieval
 plane and the reverse path. Lanes still run, still enforce framing, and still

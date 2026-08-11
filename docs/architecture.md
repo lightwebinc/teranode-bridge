@@ -428,7 +428,35 @@ root context, which closes the listeners *and* the open lane connections — the
 latter matters because a reader parked on a long-lived connection would otherwise
 block shutdown indefinitely.
 
-There is no Prometheus endpoint yet; counters are log-only.
+### Endpoints
+
+`-metrics-addr` (default `[::]:9146`) serves the same four routes as every other
+service in the stack:
+
+| Route | Answer |
+| --- | --- |
+| `GET /metrics` | Prometheus exposition, `btb_` prefix, plus `go_*`/`process_*` |
+| `GET /healthz` | always `200` — the process is alive |
+| `GET /readyz` | `200` once **every lane is bound**; `503` before that, because until then the bridge cannot accept delivery |
+| `POST /loglevel` | runtime log level change (also `SIGHUP`, which toggles debug) |
+
+The metrics are read from the same `Stats()` snapshots the log lines use — the
+collector pulls them at scrape time rather than incrementing a second set of
+counters, so the two can never disagree. A nil subsystem contributes no series,
+which is why a sink exposes lane and cache metrics and nothing else.
+
+Two counters have no other home and are owned by the metrics package:
+`btb_echo_verified_total` and `btb_echo_mismatch_total`. **`btb_echo_mismatch_total`
+is the alert that matters** — non-zero means the object plane altered bytes in
+flight.
+
+This binary registers directly on the Prometheus registry rather than routing
+cold-path counters through the OTel SDK as the rest of the stack does. The bridge
+has no per-packet path, so the SDK's cost was never the deciding factor, and a
+directly registered counter is **present at zero** — which is what lets
+`btb_echo_mismatch_total == 0` be a meaningful alert rather than an expression
+that silently matches nothing on a freshly restarted process. The trade is no
+OTLP push; scrape it.
 
 ## Resource footprint
 

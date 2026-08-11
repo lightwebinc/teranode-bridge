@@ -39,8 +39,13 @@ type Lane struct {
 	MaxObject int // 0 = codec default
 
 	listener net.Listener
+	bound    atomic.Bool
 	counts   Counters
 }
+
+// Bound reports whether the lane's listener is open. Readiness gates on it:
+// until every lane is bound the bridge cannot accept delivery.
+func (l *Lane) Bound() bool { return l.bound.Load() }
 
 // Counters are per-lane totals, read via Stats.
 type Counters struct {
@@ -77,6 +82,8 @@ func (l *Lane) Serve(ctx context.Context) error {
 		return fmt.Errorf("lane %s: listen %s: %w", l.Name, l.Addr, err)
 	}
 	l.listener = ln
+	l.bound.Store(true)
+	defer l.bound.Store(false)
 	l.Log.Info("lane listening", "lane", l.Name, "addr", l.Addr)
 
 	go func() {
