@@ -74,6 +74,20 @@ type Config struct {
 	// back down our own delivery lanes can be verified against it.
 	Published Store
 
+	// Ready, when set, gates publishing: the submitter only publishes while it
+	// returns true.
+	//
+	// This exists because the origin filter is only as good as our view of the
+	// object plane. A freshly started bridge has an EMPTY registry, so every
+	// notification looks unseen — which reads as "locally produced" — and the
+	// cluster re-emits notifications for objects it already holds. The mine tag
+	// covers blocks, but subtrees have no marker of their own beyond the block
+	// that names them, so publishing while blind means republishing other
+	// clusters' subtrees under our identity. Refusing to publish until delivery
+	// is actually flowing costs nothing real: anything genuinely ours that is
+	// missed here is still in the cluster and is re-announced by its own p2p.
+	Ready func() bool
+
 	// MineTag, when non-empty, is the local cluster's coinbase_arbitrary_text
 	// (e.g. "/teranode1/"). Block notifications whose coinbase does not carry
 	// it are treated as REMOTE in origin and skipped, closing the race the
@@ -97,6 +111,7 @@ type Subscriber struct {
 
 	subtreesUp, blocksUp             atomic.Uint64
 	remoteSkipped, skipped, failures atomic.Uint64
+	gated                            atomic.Uint64
 	foreignSkipped                   atomic.Uint64
 	reconnects                       atomic.Uint64
 }
@@ -198,6 +213,12 @@ func (s *Subscriber) publish(ctx context.Context, class string, hash hashid.Hash
 	if pub == nil {
 		return
 	}
+	if s.cfg.Ready != nil && !s.cfg.Ready() {
+		s.gated.Add(1)
+		s.log.Info("not publishing yet: no live view of the object plane",
+			"class", class, "hash", hash.Display())
+		return
+	}
 	frame, ok, err := build(ctx, hash)
 	if err != nil {
 		s.failures.Add(1)
@@ -254,6 +275,7 @@ func (s *Subscriber) Close() error { return s.conn.Close() }
 // Stats is a snapshot for logging and metrics.
 type Stats struct {
 	SubtreesUp, BlocksUp, RemoteSkipped, Skipped, Failures, Reconnects uint64
+	Gated                                                              uint64
 	// ForeignSkipped counts block notifications whose coinbase carried another
 	// cluster's tag — gossip-learned blocks correctly not republished.
 	ForeignSkipped uint64
@@ -268,6 +290,7 @@ func (s *Subscriber) Stats() Stats {
 		Skipped:        s.skipped.Load(),
 		Failures:       s.failures.Load(),
 		Reconnects:     s.reconnects.Load(),
+		Gated:          s.gated.Load(),
 		ForeignSkipped: s.foreignSkipped.Load(),
 	}
 }

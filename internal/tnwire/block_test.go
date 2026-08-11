@@ -253,3 +253,59 @@ func TestCoinbaseOf(t *testing.T) {
 		t.Fatal("tag not found in extracted coinbase")
 	}
 }
+
+// TestSubtreeRootsOf pins the other half of origin detection: a block names the
+// subtrees it contains, which is the only signal a subtree has about where it
+// came from. Getting this wrong means a cluster republishes another cluster's
+// subtrees whenever gossip beats the object plane.
+func TestSubtreeRootsOf(t *testing.T) {
+	want := [][]byte{bytes.Repeat([]byte{0x11}, 32), bytes.Repeat([]byte{0x22}, 32)}
+	frame := buildBRC144(t, want, []byte{0xAA}, 700)
+
+	got, err := SubtreeRootsOf(frame)
+	if err != nil {
+		t.Fatalf("SubtreeRootsOf: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d roots, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(got[i][:], want[i]) {
+			t.Fatalf("root %d: got %x want %x", i, got[i][:4], want[i][:4])
+		}
+	}
+	// The roots must be the SAME values a round trip preserves, or the marks we
+	// write would not match the notifications we later receive.
+	blk, err := FromTeranode(mustToTeranode(t, frame))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range blk.SubtreeRoots {
+		if blk.SubtreeRoots[i] != got[i] {
+			t.Fatalf("root %d disagrees with the parsed block", i)
+		}
+	}
+}
+
+func mustToTeranode(t *testing.T, frame []byte) []byte {
+	t.Helper()
+	out, err := ToTeranode(frame)
+	if err != nil {
+		t.Fatalf("ToTeranode: %v", err)
+	}
+	return out
+}
+
+func TestSubtreeRootsOfRejectsGarbage(t *testing.T) {
+	if _, err := SubtreeRootsOf([]byte{0x01, 0x02}); err == nil {
+		t.Fatal("expected rejection of a short frame")
+	}
+	// A count field that overruns the buffer must not panic or allocate wildly.
+	bad := make([]byte, 104)
+	for i := 96; i < 104; i++ {
+		bad[i] = 0xFF
+	}
+	if _, err := SubtreeRootsOf(bad); err == nil {
+		t.Fatal("expected rejection of an overrunning subtree count")
+	}
+}

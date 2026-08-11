@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -41,6 +42,7 @@ import (
 	"github.com/lightwebinc/teranode-bridge/internal/reverse"
 	"github.com/lightwebinc/teranode-bridge/internal/submit"
 	"github.com/lightwebinc/teranode-bridge/internal/tnasset"
+	"github.com/lightwebinc/teranode-bridge/internal/tnwire"
 	"github.com/lightwebinc/teranode-bridge/internal/txpipe"
 )
 
@@ -89,6 +91,9 @@ func main() {
 		cacheTTL   = flag.Duration("cache-ttl", 10*time.Minute, "how long a pushed object stays fetchable")
 		maxObject  = flag.Int("max-object", 0, "per-object size ceiling (0 = codec default)")
 		statsEvery = flag.Duration("stats-every", time.Minute, "interval between stats lines (0 = off)")
+
+		submitGrace = flag.Duration("submitter-grace", 45*time.Second, "after start, wait this long before the reverse path may publish; the registry starts empty, so a bridge that publishes immediately can mistake objects the cluster already held for its own")
+		submitBlind = flag.Bool("submitter-when-blind", false, "publish even while no delivery lane is connected; unsafe unless this cluster is the only publisher, because the origin filter needs a live view of the object plane")
 
 		mineTag = flag.String("mine-tag", "", "this cluster's coinbase_arbitrary_text (e.g. /teranode1/); when set, only blocks whose coinbase carries it are published up — stateless origin detection with no Teranode change")
 
@@ -193,6 +198,7 @@ func main() {
 
 	rec := metrics.New(Version, *instanceID)
 
+	started := time.Now()
 	laneSet := []*lanes.Lane{
 		{
 			Name: "tx", Class: objfmt.ClassTx, Addr: *txListen, Log: log, MaxObject: *maxObject,
@@ -236,6 +242,7 @@ func main() {
 			Blocks:         nilIfNil(upBlock),
 			Published:      cacheStore{objects},
 			MineTag:        []byte(*mineTag),
+			Ready:          submitterReady(laneSet, started, *submitGrace, *submitBlind, log),
 		}, seen, builderFunc{asset}, log)
 		if err != nil {
 			log.Error("reverse path", "err", err)
@@ -402,6 +409,21 @@ func handleBlock(ctx context.Context, obj []byte, objects *cache.Cache, seen *re
 	verifyEcho(objects, seen, id, "block", obj, rec, log)
 	objects.Put(cache.Key(id), "block", obj)
 
+	// A block on a delivery lane came from the object plane, and it names every
+	// subtree it contains. Marking those roots now — before the cluster finishes
+	// validating the block and starts emitting subtree notifications for them —
+	// is what stops this cluster republishing another cluster's subtrees when
+	// gossip wins the race. The block itself is covered by the mine tag; its
+	// subtrees have no such marker of their own, so they inherit the block's.
+	// Mark never downgrades an existing entry, so our own echo is unaffected.
+	if roots, err := tnwire.SubtreeRootsOf(obj); err == nil {
+		for _, r := range roots {
+			seen.Mark(registry.Key(r), registry.Delivered)
+		}
+	} else {
+		log.Warn("could not read subtree roots from block frame", "hash", id.Display(), "err", err)
+	}
+
 	if dir, known := seen.Mark(registry.Key(id), registry.Delivered); known {
 		log.Debug("block already seen, not re-announced", "hash", id.Display(), "seen_as", dir)
 		return nil
@@ -535,4 +557,41 @@ func nilIfNil(u *submit.UpTunnel) reverse.Publisher {
 		return nil
 	}
 	return u
+}
+
+// submitterReady decides whether the reverse path may publish right now.
+//
+// Two conditions, both about trusting the origin filter rather than about the
+// cluster's health:
+//
+//   - a startup grace, because the seen-registry begins EMPTY. A cluster
+//     re-announces objects it already holds, and to a bridge with no history
+//     every one of those looks locally produced. Publishing during that window
+//     attributes other clusters' work to this one.
+//   - at least one live delivery lane, because "did this come from the object
+//     plane?" is unanswerable while nothing is being delivered. Blocks are
+//     covered by the mine tag, but subtrees inherit their origin from the block
+//     that names them — and that block arrives on a lane.
+//
+// Anything genuinely ours that is skipped here is not lost: it stays in the
+// cluster, and the cluster keeps announcing it.
+func submitterReady(laneSet []*lanes.Lane, started time.Time, grace time.Duration, allowBlind bool, log *slog.Logger) func() bool {
+	var announced atomic.Bool
+	return func() bool {
+		if time.Since(started) < grace {
+			return false
+		}
+		if allowBlind {
+			return true
+		}
+		for _, l := range laneSet {
+			if l.Stats().Active > 0 {
+				if announced.CompareAndSwap(false, true) {
+					log.Info("reverse path armed: delivery is live, origin filter is trustworthy")
+				}
+				return true
+			}
+		}
+		return false
+	}
 }

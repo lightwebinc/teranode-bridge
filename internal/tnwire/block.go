@@ -233,3 +233,30 @@ func readVarInt(b []byte) (uint64, int) {
 		return uint64(b[0]), 1
 	}
 }
+
+// SubtreeRootsOf returns the ordered subtree roots named by a BRC-144 push
+// frame, in internal (wire) byte order.
+//
+// It exists to close the one origin gap the coinbase tag cannot: blocks carry a
+// mine tag, subtrees carry nothing. A block that arrives on a delivery lane came
+// from the object plane by definition, and it names every subtree it contains —
+// so its roots can be marked as foreign the moment the block lands, before the
+// cluster finishes validating it and starts emitting subtree notifications for
+// those same roots. Without this, a cluster that learns a block out of band
+// (gossip winning the race) republishes that block's subtrees as if it had
+// produced them.
+func SubtreeRootsOf(obj []byte) ([][32]byte, error) {
+	if len(obj) < objfmt.BlockPrefixSize {
+		return nil, errors.New("brc-144: short prefix")
+	}
+	count := binary.BigEndian.Uint64(obj[96:104])
+	end := objfmt.BlockPrefixSize + int(count)*32
+	if count > uint64(len(obj)/32) || end > len(obj) {
+		return nil, errors.New("brc-144: subtree roots overrun")
+	}
+	roots := make([][32]byte, count)
+	for i := range roots {
+		copy(roots[i][:], obj[objfmt.BlockPrefixSize+i*32:])
+	}
+	return roots, nil
+}

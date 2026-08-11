@@ -50,6 +50,7 @@ func (l *Lane) Bound() bool { return l.bound.Load() }
 // Counters are per-lane totals, read via Stats.
 type Counters struct {
 	Conns   atomic.Uint64
+	Active  atomic.Int64 // connections open right now
 	Objects atomic.Uint64
 	Bytes   atomic.Uint64
 	Errors  atomic.Uint64
@@ -60,6 +61,7 @@ type Counters struct {
 type Stats struct {
 	Name                                   string
 	Conns, Objects, Bytes, Errors, Dropped uint64
+	Active                                 int64
 }
 
 // Stats returns a snapshot of this lane's counters.
@@ -67,6 +69,7 @@ func (l *Lane) Stats() Stats {
 	return Stats{
 		Name:    l.Name,
 		Conns:   l.counts.Conns.Load(),
+		Active:  l.counts.Active.Load(),
 		Objects: l.counts.Objects.Load(),
 		Bytes:   l.counts.Bytes.Load(),
 		Errors:  l.counts.Errors.Load(),
@@ -116,6 +119,8 @@ func (l *Lane) Serve(ctx context.Context) error {
 
 func (l *Lane) serveConn(ctx context.Context, conn net.Conn) {
 	remote := conn.RemoteAddr().String()
+	l.counts.Active.Add(1)
+	defer l.counts.Active.Add(-1)
 	defer func() { _ = conn.Close() }()
 	l.Log.Info("lane connection open", "lane", l.Name, "remote", remote)
 
