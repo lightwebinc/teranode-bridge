@@ -34,9 +34,9 @@ maintained by BSV Blockchain, and to companion specifications of the BSV
 multicast transaction distribution stack:
 
   BRC-12: Raw Transaction Format
-  BRC-30: Extended Format Transactions
+  BRC-30: Transaction Extended Format (EF)
   BSV Blockchain Standards Repository
-  https://github.com/bitcoin-sv/BRCs/
+  https://github.com/bsv-blockchain/BRCs/
 
   BRC-143: Subtree Data Push Frame
   BRC-144: Block Push Frame

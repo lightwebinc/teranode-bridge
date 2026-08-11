@@ -60,7 +60,8 @@ them is deployment topology, not a different design.
 - [Configuration](docs/configuration.md) — every flag, defaults, required-flag matrix, deployment examples, reading the stats
 - [BRC-143 — Subtree Data](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-143-subtree-data.md)
 - [BRC-144 — Block Frame](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-144-block-frame.md)
-- [BRC-124 — Frame Format](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-124-frame-format.md)
+- [BRC-30 — Transaction Extended Format (EF)](https://github.com/bsv-blockchain/BRCs/blob/master/transactions/0030.md) — what the tx lane carries, preserved end to end so the validator gets its prevout data
+- [BRC-12 — Raw Transaction Format](https://github.com/bsv-blockchain/BRCs/blob/master/transactions/0012.md) — also accepted on the tx lane
 
 ## Requirements
 
