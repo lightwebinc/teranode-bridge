@@ -33,7 +33,6 @@ This software transports objects conforming to published standards
 maintained by BSV Blockchain, and to companion specifications of the BSV
 multicast transaction distribution stack:
 
-  BRC-12: Raw Transaction Format
   BRC-30: Transaction Extended Format (EF)
   BSV Blockchain Standards Repository
   https://github.com/bsv-blockchain/BRCs/

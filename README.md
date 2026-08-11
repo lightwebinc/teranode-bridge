@@ -61,7 +61,6 @@ them is deployment topology, not a different design.
 - [BRC-143 — Subtree Data](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-143-subtree-data.md)
 - [BRC-144 — Block Frame](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-144-block-frame.md)
 - [BRC-30 — Transaction Extended Format (EF)](https://github.com/bsv-blockchain/BRCs/blob/master/transactions/0030.md) — what the tx lane carries, preserved end to end so the validator gets its prevout data
-- [BRC-12 — Raw Transaction Format](https://github.com/bsv-blockchain/BRCs/blob/master/transactions/0012.md) — also accepted on the tx lane
 
 ## Requirements
 
@@ -121,7 +120,7 @@ See [docs/configuration.md](docs/configuration.md) for the full flag reference.
 
 | Port | Direction | Carries |
 | --- | --- | --- |
-| `8833` | in | transaction lane (BRC-12 raw / BRC-30 extended) |
+| `8833` | in | transaction lane (BRC-30 extended format) |
 | `9143` | in | subtree lane (BRC-143 push frames) |
 | `9144` | in | block lane (BRC-144 push frames) |
 | `9145` | in | retrieval plane — the cluster's pulls |

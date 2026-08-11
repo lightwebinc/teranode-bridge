@@ -56,7 +56,7 @@ func (s *stringList) Set(v string) error {
 
 func main() {
 	var (
-		txListen      = flag.String("tx-listen", "[::]:8833", "delivery lane: transactions (BRC-12/30)")
+		txListen      = flag.String("tx-listen", "[::]:8833", "delivery lane: transactions (BRC-30 EF)")
 		subtreeListen = flag.String("subtree-listen", "[::]:9143", "delivery lane: subtrees (BRC-143)")
 		blockListen   = flag.String("block-listen", "[::]:9144", "delivery lane: blocks (BRC-144)")
 

@@ -49,7 +49,7 @@ so there is no affinity and no per-instance URL bookkeeping.
  ───────────────────────────────────────────────────────────────────────────────
 
    tx lane      ─────────▶ :8833 ──┬──▶ tx cache
-   (BRC-12/30)                     └──▶ submit ──── POST /tx ─────▶ propagation
+   (BRC-30 EF)                     └──▶ submit ──── POST /tx ─────▶ propagation
 
    subtree lane ─────────▶ :9143 ──┬──▶ object cache
    (BRC-143)                       └──▶ announce ── Kafka ────────▶ subtree
@@ -84,7 +84,7 @@ sync marker. Objects are delimited by walking their own structure, which
 
 | Class | Delimited by | Default bind |
 | --- | --- | --- |
-| `tx` (BRC-12 raw / BRC-30 extended) | walking version, input/output vectors, locktime | `[::]:8833` |
+| `tx` (BRC-30 extended format) | walking version, input/output vectors, locktime | `[::]:8833` |
 | `subtree` (BRC-143) | the 40-byte header's `NodeCount` | `[::]:9143` |
 | `block` (BRC-144) | the 104-byte prefix's counts | `[::]:9144` |
 
@@ -139,8 +139,11 @@ rather than its gRPC API, for three reasons that all matter to a bridge:
 - It needs no generated stubs, so the bridge does not link the cluster's module
   to send a byte slice.
 
-Extended format is accepted and preserved, so a transaction reaches the
-validator with its prevout data intact.
+Extended format is preserved rather than re-encoded, which is what makes the
+path work at all: the cluster requires EF, and EF is what reaches the validator,
+prevout data intact. A transaction that arrives without its prevout data still
+parses — the lane codec delimits it either way — but the cluster refuses it on
+its merits and it lands in the `rejected` counter, not `failed`.
 
 | Status | Outcome | Meaning |
 | --- | --- | --- |
