@@ -1,0 +1,26 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries and coverage
+*.test
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Build outputs
+/build/
+/teranode-bridge
+/ci/ci
+*.tar
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Logs
+*.log

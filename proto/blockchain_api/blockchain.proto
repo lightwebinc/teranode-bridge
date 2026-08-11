@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+// Package blockchain_api is a MINIMAL, wire-compatible subset of Teranode's
+// blockchain service — just enough to subscribe to its notification stream.
+//
+// Only four things are load-bearing on the wire: the proto package name, the
+// service name, the method name, and the field numbers. Everything else here is
+// deliberately trimmed:
+//
+//   * `type` is declared int32 rather than model.NotificationType. A proto enum
+//     is a varint, so this is byte-identical and it drops the import of
+//     model.proto entirely.
+//   * Notification.metadata (field 4) is omitted. Unknown fields are skipped by
+//     any conformant parser, so leaving it out costs nothing and keeps this file
+//     free of a nested map type we never read.
+//
+// Upstream: teranode/services/blockchain/blockchain_api/blockchain_api.proto
+// @ 1cca625 (rpc Subscribe :125, SubscribeRequest :496, Notification :501).
+// Regenerate with: buf generate  (see buf.gen.yaml)
+package blockchain_api;
+
+option go_package = "github.com/lightwebinc/teranode-bridge/proto/blockchain_api;blockchain_api";
+
+service BlockchainAPI {
+  // Subscribe streams notifications as the node accepts subtrees and blocks.
+  rpc Subscribe(SubscribeRequest) returns (stream Notification) {}
+}
+
+message SubscribeRequest {
+  string source = 1;
+}
+
+// NotificationType values we care about, mirroring model.NotificationType:
+//   1 = Subtree, 2 = Block. (0 PING, 4 FSMState, 5 BlockSubtreesSet,
+//   6 PeerFailure, 7 BlockPersisted, 8 BlockMinedUnset.)
+message Notification {
+  int32 type = 1;
+  bytes hash = 2;
+  string base_URL = 3;
+}

@@ -1,0 +1,10 @@
+.git
+.github
+.golangci.yml
+build/
+ci/
+docs/
+*.md
+LICENSE
+NOTICE
+teranode-bridge

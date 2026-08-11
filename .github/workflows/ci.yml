@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: ci (dagger)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: teranode-bridge
+
+      - name: Resolve shard-common ref
+        id: common_ref
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if [ -n "$BRANCH" ] && gh api "repos/lightwebinc/shard-common/branches/$BRANCH" >/dev/null 2>&1; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+            echo "Using shard-common@$BRANCH (matching feature branch found)"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "Using shard-common@main (no matching feature branch)"
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          repository: lightwebinc/shard-common
+          ref: ${{ steps.common_ref.outputs.ref }}
+          path: shard-common
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: teranode-bridge/ci/go.mod
+          cache: false
+
+      - name: Run Dagger pipeline
+        working-directory: teranode-bridge
+        env:
+          GOWORK: "off"
+        run: make ci

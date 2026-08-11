@@ -1,0 +1,55 @@
+name: CodeQL
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+  schedule:
+    - cron: '0 3 * * 1'  # weekly, Monday 03:00 UTC
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: analyze
+    # Code scanning uploads are rejected unless Code Security is enabled, which
+    # is free on public repositories only. Skip while this repo is private; the
+    # job starts running by itself the moment it is made public.
+    if: github.event.repository.visibility == 'public'
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: teranode-bridge
+
+      - uses: actions/checkout@v6
+        with:
+          repository: lightwebinc/shard-common
+          path: shard-common
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: teranode-bridge/go.mod
+
+      - name: Use local shard-common
+        working-directory: teranode-bridge
+        run: go mod edit -replace github.com/lightwebinc/shard-common=../shard-common
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: go
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v4
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:go"
