@@ -66,6 +66,11 @@ func New(o Options) *Cache {
 // Put stores body under key. Storing an existing key refreshes it and keeps the
 // original bytes — re-delivery of an object we already hold is a no-op, which is
 // what makes A/B failover and reconnects harmless.
+//
+// The bytes are COPIED. Callers hand in the slice objfmt.Reader.Next returned,
+// which aliases the reader's buffer and is overwritten by later objects on the
+// same connection — retaining it uncopied corrupts cached entries in place,
+// and the retrieval plane would serve those bytes to the cluster.
 func (c *Cache) Put(key Key, class string, body []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -75,6 +80,7 @@ func (c *Cache) Put(key Key, class string, body []byte) {
 		c.lru.MoveToFront(e.elem)
 		return
 	}
+	body = append([]byte(nil), body...)
 	e := &entry{key: key, body: body, class: class, stored: c.now()}
 	e.elem = c.lru.PushFront(e)
 	c.items[key] = e
