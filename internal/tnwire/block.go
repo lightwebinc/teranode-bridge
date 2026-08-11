@@ -157,6 +157,30 @@ func FromTeranode(b []byte) (encode.Block, error) {
 	return out, nil
 }
 
+// CoinbaseOf returns the in-band coinbase transaction of a BRC-144 push frame.
+//
+// It exists for origin detection: `coinbase_arbitrary_text` is per-node
+// Teranode CONFIGURATION stamped into every block that node mines, so a bridge
+// that knows its own cluster's tag can tell locally-mined blocks from blocks
+// the cluster merely learned about — statelessly, from block content alone,
+// with no Teranode code change and no reliance on in-memory registry state
+// that a restart wipes.
+func CoinbaseOf(obj []byte) ([]byte, error) {
+	if len(obj) < objfmt.BlockPrefixSize {
+		return nil, errors.New("brc-144: short prefix")
+	}
+	subtreeCount := binary.BigEndian.Uint64(obj[96:104])
+	off := objfmt.BlockPrefixSize + int(subtreeCount)*32
+	if off > len(obj) {
+		return nil, errors.New("brc-144: subtree roots overrun")
+	}
+	cbLen, err := objfmt.TxSize(obj[off:])
+	if err != nil {
+		return nil, fmt.Errorf("brc-144: coinbase: %w", err)
+	}
+	return obj[off : off+cbLen], nil
+}
+
 func isZero32(b []byte) bool {
 	for _, x := range b {
 		if x != 0 {

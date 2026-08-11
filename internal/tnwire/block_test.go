@@ -2,7 +2,9 @@ package tnwire
 
 import (
 	"bytes"
+
 	"encoding/binary"
+	"github.com/lightwebinc/teranode-bridge/internal/encode"
 	"testing"
 
 	"github.com/lightwebinc/shard-common/objfmt"
@@ -206,5 +208,48 @@ func TestFromTeranodeToleratesMissingBUMPField(t *testing.T) {
 	}
 	if len(parsed.CoinbaseBUMP) != 0 || parsed.Height != 9 {
 		t.Fatalf("height=%d bump=%d", parsed.Height, len(parsed.CoinbaseBUMP))
+	}
+}
+
+// TestCoinbaseOf pins the origin-detection extractor: the in-band coinbase of
+// a BRC-144 frame must come back exactly, so a tag check against it is a check
+// against what the miner actually stamped.
+func TestCoinbaseOf(t *testing.T) {
+	tag := []byte("/teranode2/")
+	script := append([]byte{0x03, 0x01, 0x02, 0x03}, tag...)
+	cb := make([]byte, 0, 64)
+	cb = append(cb, 1, 0, 0, 0) // version
+	cb = append(cb, 1)          // input count
+	cb = append(cb, make([]byte, 32)...)
+	cb = append(cb, 0xFF, 0xFF, 0xFF, 0xFF) // coinbase vout
+	cb = append(cb, byte(len(script)))
+	cb = append(cb, script...)
+	cb = append(cb, 0xFF, 0xFF, 0xFF, 0xFF) // sequence
+	cb = append(cb, 1)                      // output count
+	cb = append(cb, 1, 0, 0, 0, 0, 0, 0, 0)
+	cb = append(cb, 1, 0x51)
+	cb = append(cb, 0, 0, 0, 0) // locktime
+
+	blk := encode.Block{
+		Header:       make([]byte, 80),
+		TxCount:      1,
+		SizeInBytes:  uint64(len(cb)) + 80,
+		SubtreeRoots: [][32]byte{{0xAB}},
+		Coinbase:     cb,
+		Height:       7,
+	}
+	frame, err := blk.Encode()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	got, err := CoinbaseOf(frame)
+	if err != nil {
+		t.Fatalf("CoinbaseOf: %v", err)
+	}
+	if !bytes.Equal(got, cb) {
+		t.Fatal("extracted coinbase differs from the one encoded")
+	}
+	if !bytes.Contains(got, tag) {
+		t.Fatal("tag not found in extracted coinbase")
 	}
 }

@@ -125,7 +125,33 @@ be servable the instant the announcement lands.
 **Blocks** (`handleBlock`) — the identity is `SHA256d(header[:80])`, exactly as
 the chain identifies a block. Stored, then announced.
 
-## Submitting transactions
+## Submitting transactions — the batching pipeline
+
+The lane read loop never waits on the cluster. `handleTx` computes the txid,
+makes **one** immutable copy (shared by cache and pipeline — lane slices alias
+the reader's buffer), marks the seen-registry and enqueues; everything after
+that is the tx pipeline's problem. The pipeline accumulates contiguous batch
+bodies and ships them on propagation's **`POST /txs`** batch endpoint — the
+body format is the same bare concatenated-transaction stream the lane itself
+carries, so no re-encoding happens anywhere.
+
+Measured on a 2×18-core host against a mock propagation sink: **1.47M tx/s
+sustained** (three consecutive 30 s runs, stable heap, zero losses), from
+21 tx/s with the original serial per-transaction POST. The serial design
+coupled throughput to cluster latency (1/RTT per connection); batching decouples
+them, and backpressure — a full pipeline queue blocks the lane, closing the TCP
+window — bounds memory when the cluster is slower than the fabric.
+
+Sizing: `-tx-batch`/`-tx-batch-bytes` (server caps 1024 / 32 MiB), `-tx-linger`
+(latency bound when quiet), `-tx-inflight` (concurrent batch requests),
+`-tx-builders` (parallel accumulators, routed by txid). The `/txs` contract —
+a request must not contain both a parent and its child, because in-batch
+processing is concurrent — is enforced structurally: each transaction's input
+outpoints are walked, and a dependency on the open batch seals it first.
+Failures that resolve with time (`422`, missing parent — the only use of that
+status) retry individually with a short ladder; merit rejections do not.
+
+## Submitting transactions — single (legacy detail)
 
 `internal/submit` uses the propagation service's **HTTP** endpoint (`POST /tx`)
 rather than its gRPC API, for three reasons that all matter to a bridge:

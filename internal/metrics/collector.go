@@ -43,7 +43,18 @@ var (
 		"Objects recognised as already seen — re-delivery after a failover or reconnect, or our own echo returning.", nil, nil)
 
 	submitTotal = prometheus.NewDesc("btb_submit_total",
-		"Transactions handed to the cluster's propagation service, by outcome. `rejected` is the cluster refusing on merits (not retryable); `failed` is transport or server fault (retryable).", []string{"outcome"}, nil)
+		"Transactions handed to the cluster's propagation service, by outcome. `rejected` is the cluster refusing on merits (after any retries); `failed` is transport or server fault.", []string{"outcome"}, nil)
+
+	pipeBatches = prometheus.NewDesc("btb_txpipe_batches_total",
+		"Batch submissions shipped to POST /txs.", nil, nil)
+	pipeSeals = prometheus.NewDesc("btb_txpipe_batch_seals_total",
+		"Why batches were sealed. `dependency` = a tx referenced a parent in the open batch (the /txs contract forbids parent+child in one request); `linger` = age; `size`/`bytes` = full.", []string{"reason"}, nil)
+	pipeRetried = prometheus.NewDesc("btb_txpipe_retried_total",
+		"Transactions re-submitted individually after a partial batch failure (missing-parent resolves once the parent lands).", nil, nil)
+	pipeRetryOK = prometheus.NewDesc("btb_txpipe_retry_accepted_total",
+		"Retried transactions the cluster then accepted.", nil, nil)
+	pipeQueue = prometheus.NewDesc("btb_txpipe_queue_depth",
+		"Transactions waiting in the pipe. At the ceiling, backpressure blocks the lane read loop.", nil, nil)
 
 	announceTotal = prometheus.NewDesc("btb_announce_total",
 		"Announcements produced to the cluster's Kafka, by object class.", []string{"class"}, nil)
@@ -137,12 +148,19 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(registryDups, float64(s.Hits))
 	}
 
-	if src.Submit != nil {
-		s := src.Submit.Stats()
+	if src.Tx != nil {
+		s := src.Tx.Stats()
 		counter(submitTotal, float64(s.Accepted), "accepted")
-		counter(submitTotal, float64(s.Duplicate), "duplicate")
 		counter(submitTotal, float64(s.Rejected), "rejected")
 		counter(submitTotal, float64(s.Failed), "failed")
+		counter(pipeBatches, float64(s.Batches))
+		counter(pipeSeals, float64(s.SealSize), "size")
+		counter(pipeSeals, float64(s.SealBytes), "bytes")
+		counter(pipeSeals, float64(s.SealLinger), "linger")
+		counter(pipeSeals, float64(s.SealDep), "dependency")
+		counter(pipeRetried, float64(s.Retried))
+		counter(pipeRetryOK, float64(s.RetryAccepted))
+		gauge(pipeQueue, float64(s.Queue))
 	}
 
 	if src.Announce != nil {
@@ -168,6 +186,7 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(reversePublished, float64(s.BlocksUp), "block")
 		counter(reverseSkipped, float64(s.RemoteSkipped), "remote_origin")
 		counter(reverseSkipped, float64(s.Skipped), "unavailable")
+		counter(reverseSkipped, float64(s.ForeignSkipped), "foreign_origin")
 		counter(reverseFailures, float64(s.Failures))
 		counter(reverseReconnects, float64(s.Reconnects))
 	}

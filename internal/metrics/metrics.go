@@ -30,6 +30,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -47,11 +48,15 @@ import (
 	"github.com/lightwebinc/teranode-bridge/internal/retrieval"
 	"github.com/lightwebinc/teranode-bridge/internal/reverse"
 	"github.com/lightwebinc/teranode-bridge/internal/submit"
+	"github.com/lightwebinc/teranode-bridge/internal/txpipe"
 )
 
 // ServiceName is the OTel service.name; it must match what logging.Init is
 // given so logs and metrics carry the same identity.
 const ServiceName = "teranode-bridge"
+
+// StatSource is any cache-shaped subsystem that can snapshot its counters.
+type StatSource interface{ Stats() cache.Stats }
 
 // Sources are the live subsystems to read at scrape time. Every field is
 // optional: a nil one simply contributes no series, which is what makes a
@@ -59,9 +64,9 @@ const ServiceName = "teranode-bridge"
 type Sources struct {
 	Lanes     []*lanes.Lane
 	Objects   *cache.Cache
-	Txs       *cache.Cache
+	Txs       StatSource
 	Seen      *registry.Registry
-	Submit    *submit.Submitter
+	Tx        *txpipe.Pipe
 	Announce  *announce.Producer
 	Retrieval *retrieval.Server
 	Reverse   *reverse.Subscriber
@@ -176,6 +181,12 @@ func (r *Recorder) Serve(ctx context.Context, addr string) error {
 	if r.levelVar != nil {
 		mux.Handle("/loglevel", logging.LevelHandler(r.levelVar))
 	}
+	// pprof rides the metrics listener: same trust boundary, and profiling a
+	// throughput problem without a rebuild is worth the four routes.
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/heap", pprof.Index)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	var lc net.ListenConfig

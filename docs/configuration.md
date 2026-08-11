@@ -106,6 +106,57 @@ filter (so `remote_skipped` keeps counting), but it publishes nothing and makes
 no asset fetches. That makes a standby bridge a hot spare: promotion is a flag
 flip and a restart.
 
+## Transaction pipeline
+
+The tx lane never submits synchronously: objects are enqueued to a batching
+pipeline that ships them on propagation's `POST /txs` endpoint (server caps:
+1024 txs / 32 MiB per request). The lane read loop's only costs are parse,
+hash, one copy, and an enqueue — measured at >1.4M tx/s sustained on a 2×18-core
+host against a mock sink, with backpressure (a full queue blocks the lane, which
+closes the TCP window) bounding memory when the cluster is slower than the
+fabric.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-tx-batch` | `512` | Transactions per batch (capped at the server's 1024). |
+| `-tx-batch-bytes` | `8388608` | Batch body ceiling (capped under the server's 32 MiB). |
+| `-tx-linger` | `2ms` | Max age of a non-full batch — bounds added latency when quiet. |
+| `-tx-inflight` | `4` | Concurrent batch requests. Throughput ≈ inflight × batch / RTT. |
+| `-tx-builders` | `4` | Parallel batch builders (power of two, ≤16); txs route to builders by txid. |
+| `-tx-retries` | `3` | Per-tx retries for failures that resolve with time (missing parent). `0` disables. |
+
+Two contract details worth knowing:
+
+- **Parent/child**: propagation processes a batch concurrently, and its handler
+  documents that a request must not contain both a parent and its child. The
+  pipe walks each transaction's input outpoints and **seals** the open batch
+  when a dependency lands in it, so same-builder chains never violate the
+  contract; cross-builder and cross-connection races fall to the bounded retry
+  (`422` = missing parent, the only use of that status).
+- **Partial failure**: a batch answering `500 Failed to process transactions`
+  had its other members processed; the failed txids are parsed from the error
+  lines and retried individually.
+
+## Origin detection (`-mine-tag`)
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-mine-tag` | `""` | This cluster's `coinbase_arbitrary_text` (e.g. `/teranode1/`). |
+
+Blockchain notifications carry no origin, and a block this cluster learned over
+libp2p **before** the fabric delivered it looks unseen — without a check, the
+reverse path republishes a remote block upward with false attribution. When
+`-mine-tag` is set, only blocks whose in-band coinbase carries the tag are
+published; foreign blocks count in
+`btb_reverse_skipped_total{reason="foreign_origin"}`. The check is stateless
+(derived from block content), so it also survives bridge restarts, which wipe
+the seen-registry.
+
+This requires **no Teranode change**: `coinbase_arbitrary_text` is existing
+per-node Teranode configuration — give each cluster a distinct tag and pass the
+same value here. Subtrees need no equivalent: their notification has exactly one
+producer, local block assembly.
+
 ## Cache and duplicate suppression
 
 | Flag | Default | Description |
@@ -120,8 +171,15 @@ latency, not lost data. Watch `cache stats evicted` and `retrieval stats miss`
 together; a rising `miss` with a flat `evicted` points at a topic or URL problem
 instead.
 
-The seen-registry (duplicate suppression and the reverse path's origin filter) is
-fixed at a 30-minute TTL and 2²⁰ entries; it is not currently configurable.
+The tx cache is **generational** (two map generations, rotated by TTL/2 or byte
+budget, oldest dropped wholesale): at megatransaction rates an LRU costs ~5× the
+payload in heap and collapses into continuous GC. Entry lifetime is between
+TTL/2 and TTL — a recency window, which is exactly the subtree_data fallback's
+need. The subtree/block cache keeps precise LRU+TTL semantics.
+
+The seen-registry (duplicate suppression and the reverse path's origin filter)
+is generational the same way: 30-minute nominal TTL, 2²⁰ entries; not currently
+configurable.
 
 ## Process
 

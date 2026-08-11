@@ -15,8 +15,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -39,6 +41,7 @@ import (
 	"github.com/lightwebinc/teranode-bridge/internal/reverse"
 	"github.com/lightwebinc/teranode-bridge/internal/submit"
 	"github.com/lightwebinc/teranode-bridge/internal/tnasset"
+	"github.com/lightwebinc/teranode-bridge/internal/txpipe"
 )
 
 // Version is stamped at build time with -ldflags "-X main.Version=…". It is
@@ -87,6 +90,15 @@ func main() {
 		maxObject  = flag.Int("max-object", 0, "per-object size ceiling (0 = codec default)")
 		statsEvery = flag.Duration("stats-every", time.Minute, "interval between stats lines (0 = off)")
 
+		mineTag = flag.String("mine-tag", "", "this cluster's coinbase_arbitrary_text (e.g. /teranode1/); when set, only blocks whose coinbase carries it are published up — stateless origin detection with no Teranode change")
+
+		txBatch      = flag.Int("tx-batch", 512, "transactions per batch submit (POST /txs, server cap 1024); 0 keeps legacy per-tx POST /tx")
+		txBatchBytes = flag.Int("tx-batch-bytes", 8<<20, "batch body ceiling in bytes (server cap 32 MiB)")
+		txLinger     = flag.Duration("tx-linger", 2*time.Millisecond, "max age of a non-full batch before it is sent")
+		txInflight   = flag.Int("tx-inflight", 4, "concurrent batch submissions in flight")
+		txBuilders   = flag.Int("tx-builders", 4, "parallel batch builders (power of two, max 16)")
+		txRetries    = flag.Int("tx-retries", 3, "per-tx retries for failures that resolve with time (missing parent); 0 = off")
+
 		metricsAddr = flag.String("metrics-addr", "[::]:9146", "HTTP listener for /metrics, /healthz, /readyz, /loglevel (empty = off)")
 		logLevel    = flag.String("log-level", "info", "debug|info|warn|error")
 		logFormat   = flag.String("log-format", "text", "log encoding: text (stderr) or json (stdout, the fleet aggregation contract)")
@@ -125,11 +137,14 @@ func main() {
 	defer stop()
 
 	objects := cache.New(cache.Options{MaxBytes: *cacheBytes, TTL: *cacheTTL})
-	txs := cache.New(cache.Options{MaxBytes: *cacheBytes, TTL: *cacheTTL})
+	// The tx cache is generational, not LRU: at megatransaction-per-second
+	// rates the LRU bookkeeping costs ~5× the payload in heap and its pointer
+	// graph is what the GC scans. See cache.Generational.
+	txs := cache.NewGenerational(cache.Options{MaxBytes: *cacheBytes, TTL: *cacheTTL})
 	seen := registry.New(30*time.Minute, 1<<20)
 
 	var (
-		sub      *submit.Submitter
+		pipe     *txpipe.Pipe
 		producer *announce.Producer
 		ret      *retrieval.Server
 		baseURL  string
@@ -137,13 +152,21 @@ func main() {
 	)
 
 	if !sink {
-		if sub, err = submit.New(submit.Config{Endpoints: propagation}, log); err != nil {
-			log.Error("propagation submitter", "err", err)
+		if pipe, err = txpipe.New(txpipe.Config{
+			Endpoints:     propagation,
+			BatchTxs:      *txBatch,
+			BatchBytes:    *txBatchBytes,
+			Linger:        *txLinger,
+			Inflight:      *txInflight,
+			Builders:      *txBuilders,
+			RetryAttempts: *txRetries,
+		}, log); err != nil {
+			log.Error("tx pipeline", "err", err)
 			os.Exit(1)
 		}
-		if err := sub.Health(ctx); err != nil {
-			// Not fatal: the cluster may still be starting. Delivery will retry
-			// per transaction and the failure will be visible in the stats.
+		if err := probeHealth(ctx, propagation); err != nil {
+			// Not fatal: the cluster may still be starting. Failures stay
+			// visible in the pipe's failed/rejected counters.
 			log.Warn("propagation health check failed at startup", "err", err)
 		}
 		if producer, err = announce.New(announce.Config{
@@ -174,7 +197,7 @@ func main() {
 		{
 			Name: "tx", Class: objfmt.ClassTx, Addr: *txListen, Log: log, MaxObject: *maxObject,
 			Handle: func(ctx context.Context, obj []byte) error {
-				return handleTx(ctx, obj, txs, seen, sub)
+				return handleTx(ctx, obj, txs, seen, pipe)
 			},
 		},
 		{
@@ -212,6 +235,7 @@ func main() {
 			Subtrees:       nilIfNil(upSubtree),
 			Blocks:         nilIfNil(upBlock),
 			Published:      cacheStore{objects},
+			MineTag:        []byte(*mineTag),
 		}, seen, builderFunc{asset}, log)
 		if err != nil {
 			log.Error("reverse path", "err", err)
@@ -227,7 +251,7 @@ func main() {
 	// and cache metrics and nothing it cannot honestly report.
 	rec.SetSources(metrics.Sources{
 		Lanes: laneSet, Objects: objects, Txs: txs, Seen: seen,
-		Submit: sub, Announce: producer, Retrieval: ret, Reverse: rev,
+		Tx: pipe, Announce: producer, Retrieval: ret, Reverse: rev,
 		UpTunnels: []*submit.UpTunnel{upSubtree, upBlock},
 	})
 	inv := hostinfo.Gather(metrics.ServiceName, Version)
@@ -241,6 +265,9 @@ func main() {
 	}
 	if ret != nil {
 		g.Go(func() error { return ret.Serve(gctx) })
+	}
+	if pipe != nil {
+		g.Go(func() error { return pipe.Run(gctx) })
 	}
 	if rev != nil {
 		g.Go(func() error { return rev.Run(gctx) })
@@ -266,7 +293,7 @@ func main() {
 				case <-gctx.Done():
 					return nil
 				case <-t.C:
-					logStats(log, laneSet, objects, txs, seen, sub, producer, ret, rev, upSubtree, upBlock)
+					logStats(log, laneSet, objects, txs, seen, pipe, producer, ret, rev, upSubtree, upBlock)
 				}
 			}
 		})
@@ -276,35 +303,59 @@ func main() {
 		log.Error("bridge stopped", "err", err)
 		os.Exit(1)
 	}
-	logStats(log, laneSet, objects, txs, seen, sub, producer, ret, rev, upSubtree, upBlock)
+	logStats(log, laneSet, objects, txs, seen, pipe, producer, ret, rev, upSubtree, upBlock)
 	log.Info("bridge stopped")
 }
 
 // handleTx caches the transaction (so it can serve as a subtree member later)
-// and hands it to the cluster.
-func handleTx(ctx context.Context, obj []byte, txs *cache.Cache, seen *registry.Registry,
-	sub *submit.Submitter) error {
+// and enqueues it for batched submission. The read loop never waits on the
+// cluster: submission latency is the pipe's problem, and backpressure arrives
+// only when the pipe's queue is full.
+func handleTx(ctx context.Context, obj []byte, txs *cache.Generational, seen *registry.Registry,
+	pipe *txpipe.Pipe) error {
 
 	id, err := objfmt.TxID(obj)
 	if err != nil {
 		return fmt.Errorf("txid: %w", err)
 	}
-	txs.Put(cache.Key(id), "tx", obj)
+	// ONE copy per transaction, shared immutably by the cache and the pipe.
+	// obj itself aliases the lane reader's buffer and dies at the next read.
+	owned := append([]byte(nil), obj...)
+	txs.PutOwned(cache.Key(id), "tx", owned)
 
 	if _, known := seen.Mark(registry.Key(id), registry.Delivered); known {
 		// Re-delivery after an A/B failover or reconnect. Already handed over.
 		return nil
 	}
-	if sub == nil {
+	if pipe == nil {
 		return nil // sink mode
 	}
-	outcome, err := sub.Tx(ctx, obj)
-	switch outcome {
-	case submit.Accepted, submit.Duplicate:
-		return nil
-	default:
-		return fmt.Errorf("tx %s %s: %w", hashid.Hash(id).Display(), outcome, err)
+	return pipe.EnqueueOwned(ctx, owned, hashid.Hash(id))
+}
+
+// probeHealth reports whether at least one propagation endpoint answers.
+func probeHealth(ctx context.Context, endpoints []string) error {
+	client := &http.Client{Timeout: 5 * time.Second}
+	var lastErr error
+	for _, ep := range endpoints {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(ep, "/")+"/health", nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return nil
+		}
+		lastErr = fmt.Errorf("%s/health: http %d", ep, resp.StatusCode)
 	}
+	return lastErr
 }
 
 // handleSubtree stores the frame and announces it, pointing the cluster at our
@@ -362,8 +413,8 @@ func handleBlock(ctx context.Context, obj []byte, objects *cache.Cache, seen *re
 	return producer.Block(ctx, id.Display(), baseURL)
 }
 
-func logStats(log *slog.Logger, laneSet []*lanes.Lane, objects, txs *cache.Cache,
-	seen *registry.Registry, sub *submit.Submitter, producer *announce.Producer, ret *retrieval.Server,
+func logStats(log *slog.Logger, laneSet []*lanes.Lane, objects *cache.Cache, txs *cache.Generational,
+	seen *registry.Registry, pipe *txpipe.Pipe, producer *announce.Producer, ret *retrieval.Server,
 	rev *reverse.Subscriber, upSubtree, upBlock *submit.UpTunnel) {
 
 	for _, l := range laneSet {
@@ -376,10 +427,12 @@ func logStats(log *slog.Logger, laneSet []*lanes.Lane, objects, txs *cache.Cache
 		"txs", txStats.Entries, "tx_bytes", txStats.Bytes, "evicted", objStats.Evicted+txStats.Evicted)
 	rs := seen.Stats()
 	log.Info("registry stats", "entries", rs.Entries, "duplicates", rs.Hits)
-	if sub != nil {
-		s := sub.Stats()
-		log.Info("submit stats", "accepted", s.Accepted, "duplicate", s.Duplicate,
-			"rejected", s.Rejected, "failed", s.Failed)
+	if pipe != nil {
+		s := pipe.Stats()
+		log.Info("submit stats", "accepted", s.Accepted, "rejected", s.Rejected,
+			"failed", s.Failed, "batches", s.Batches, "retried", s.Retried,
+			"retry_ok", s.RetryAccepted, "queue", s.Queue,
+			"seals_dep", s.SealDep, "seals_linger", s.SealLinger)
 	}
 	if producer != nil {
 		a := producer.Stats()

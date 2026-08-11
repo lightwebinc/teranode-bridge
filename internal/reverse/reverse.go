@@ -17,6 +17,7 @@
 package reverse
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -32,6 +33,7 @@ import (
 
 	"github.com/lightwebinc/teranode-bridge/internal/hashid"
 	"github.com/lightwebinc/teranode-bridge/internal/registry"
+	"github.com/lightwebinc/teranode-bridge/internal/tnwire"
 )
 
 // Notification types, mirroring model.NotificationType.
@@ -71,6 +73,17 @@ type Config struct {
 	// Published, if set, receives every frame we publish, so the echo that comes
 	// back down our own delivery lanes can be verified against it.
 	Published Store
+
+	// MineTag, when non-empty, is the local cluster's coinbase_arbitrary_text
+	// (e.g. "/teranode1/"). Block notifications whose coinbase does not carry
+	// it are treated as REMOTE in origin and skipped, closing the race the
+	// seen-registry cannot: a block this cluster learned over libp2p before
+	// the fabric delivered it looks unseen and would otherwise be republished
+	// upward with false attribution. The check is stateless — derived from
+	// block content — so it also survives bridge restarts, which wipe the
+	// registry. Subtrees carry no coinbase and need no equivalent: their
+	// notification has exactly one producer, local block assembly.
+	MineTag []byte
 }
 
 // Subscriber watches the cluster and republishes what it produces.
@@ -84,6 +97,7 @@ type Subscriber struct {
 
 	subtreesUp, blocksUp             atomic.Uint64
 	remoteSkipped, skipped, failures atomic.Uint64
+	foreignSkipped                   atomic.Uint64
 	reconnects                       atomic.Uint64
 }
 
@@ -196,6 +210,26 @@ func (s *Subscriber) publish(ctx context.Context, class string, hash hashid.Hash
 		return
 	}
 
+	// Origin gate: a block whose coinbase does not carry this cluster's tag
+	// was mined elsewhere — the cluster learned of it (libp2p, catchup) and
+	// notified us, but it is not ours to publish. Without this, gossip winning
+	// the race against the fabric turns into a republish with false
+	// attribution at every receiving cluster.
+	if class == "block" && len(s.cfg.MineTag) > 0 {
+		cb, err := tnwire.CoinbaseOf(frame)
+		if err != nil {
+			s.failures.Add(1)
+			s.log.Error("origin check failed to parse coinbase", "hash", hash.Display(), "err", err)
+			return
+		}
+		if !bytes.Contains(cb, s.cfg.MineTag) {
+			s.foreignSkipped.Add(1)
+			s.log.Info("skipping foreign-origin block (coinbase tag mismatch)",
+				"hash", hash.Display(), "tag", string(s.cfg.MineTag))
+			return
+		}
+	}
+
 	// Register BEFORE sending: the object comes straight back down our own
 	// delivery lanes (own-traffic exclusion covers only the tx class), and it
 	// must be recognised as ours when it does. Keeping the exact bytes turns
@@ -220,17 +254,21 @@ func (s *Subscriber) Close() error { return s.conn.Close() }
 // Stats is a snapshot for logging and metrics.
 type Stats struct {
 	SubtreesUp, BlocksUp, RemoteSkipped, Skipped, Failures, Reconnects uint64
+	// ForeignSkipped counts block notifications whose coinbase carried another
+	// cluster's tag — gossip-learned blocks correctly not republished.
+	ForeignSkipped uint64
 }
 
 // Stats returns a snapshot of the reverse path's counters.
 func (s *Subscriber) Stats() Stats {
 	return Stats{
-		SubtreesUp:    s.subtreesUp.Load(),
-		BlocksUp:      s.blocksUp.Load(),
-		RemoteSkipped: s.remoteSkipped.Load(),
-		Skipped:       s.skipped.Load(),
-		Failures:      s.failures.Load(),
-		Reconnects:    s.reconnects.Load(),
+		SubtreesUp:     s.subtreesUp.Load(),
+		BlocksUp:       s.blocksUp.Load(),
+		RemoteSkipped:  s.remoteSkipped.Load(),
+		Skipped:        s.skipped.Load(),
+		Failures:       s.failures.Load(),
+		Reconnects:     s.reconnects.Load(),
+		ForeignSkipped: s.foreignSkipped.Load(),
 	}
 }
 
