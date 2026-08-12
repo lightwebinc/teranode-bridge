@@ -171,6 +171,18 @@ so a shared-library change can be validated here before it is tagged. The image
 build deliberately does *not* use that replace: a published image always resolves
 `shard-common` from the module proxy at its committed version.
 
+## Helm chart
+
+A Kubernetes Helm chart is published from a dedicated chart repository:
+
+- Repository: [`lightwebinc/teranode-bridge-helm`](https://github.com/lightwebinc/teranode-bridge-helm)
+- OCI: `helm install bridge oci://ghcr.io/lightwebinc/charts/teranode-bridge`
+
+`config.advertise`, `config.propagation` and `config.kafka` are effectively
+required (the chart warns and the bridge exits without them) unless
+`config.mode=sink`. See the chart README for the three-service shape and the
+submitter-role scaling rules.
+
 ## Layout
 
 ```
