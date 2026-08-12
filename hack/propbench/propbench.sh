@@ -5,6 +5,19 @@
 #   ./propbench.sh count         # txs propagation has accepted (kafka watermarks)
 #   ./propbench.sh down
 #
+# MEASURED 2026-08-12 (2x18-core host, rig on the same box as the driver):
+#   16 conns -> 152,666 tx/s   client-side, and the validatortxs high-watermark
+#                              delta AGREES to within 1 tx (4,579,971 in 30s)
+#   32 conns -> 123,742 tx/s   past the knee: more concurrency is slower
+#
+# What that number IS: the ingest edge with a null tx store and no validation.
+# It is an UPPER BOUND on what any real cluster can absorb, never a cluster
+# throughput claim — everything expensive (validator, UTXO store, block
+# assembly) sits on the far side of the validatortxs topic this rig terminates.
+# A 15s CPU profile at 32 conns is 29% runtime.(*lfstack).pop + 6% push, i.e.
+# the ceiling here is Go allocator/GC contention inside propagation, not the
+# bridge and not the network.
+#
 # Same containers and settings as docker-compose.yml in this directory; see that
 # file for why each setting is what it is. Propagation ends up on
 # http://127.0.0.1:18833 (/txs, /tx, /health) with metrics on :16060/metrics.
@@ -63,7 +76,19 @@ up() {
 # column shift would misreport throughput instead of failing.
 count() {
   docker exec propbench-kafka rpk topic describe validatortxs -p --format json \
-    | python3 -c 'import json,sys; d=json.load(sys.stdin); ps=d.get("partitions") or d; print(sum(p["high_watermark"] for p in ps))'
+    | python3 -c '
+import json, sys
+doc = json.load(sys.stdin)
+# rpk emits a LIST of sections; the partition section is the one whose
+# "partitions" value is a list of per-partition dicts (the summary section
+# reuses the same key for a plain count).
+sections = doc if isinstance(doc, list) else [doc]
+total = 0
+for sec in sections:
+    parts = sec.get("partitions")
+    if isinstance(parts, list):
+        total += sum(p["high_watermark"] for p in parts)
+print(total)'
 }
 
 down() {

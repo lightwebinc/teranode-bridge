@@ -20,6 +20,12 @@
 // Neither mock validates scripts, touches a UTXO store, or writes anything
 // durable, so neither is a substitute for measuring a real cluster. They bound
 // the bridge; the cluster bounds the system.
+//
+// For the rung above these — a REAL propagation service, standalone, with the
+// blockchain service and one Redpanda and nothing else — see hack/propbench.
+// Measured 2026-08-12: 152,666 tx/s at 16 connections, confirmed against the
+// Kafka high-watermark delta, with the profile showing the ceiling inside
+// propagation's own allocator rather than in the bridge.
 package main
 
 import (
