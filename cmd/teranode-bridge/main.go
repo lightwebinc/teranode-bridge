@@ -577,6 +577,13 @@ func nilIfNil(u *submit.UpTunnel) reverse.Publisher {
 // cluster, and the cluster keeps announcing it.
 func submitterReady(laneSet []*lanes.Lane, started time.Time, grace time.Duration, allowBlind bool, log *slog.Logger) func() bool {
 	var announced atomic.Bool
+	// Origin evidence arrives on the CLASS lanes, not the transaction lane. A
+	// block frame carries this cluster's mine tag and names every subtree it
+	// contains, so it is the only thing that can prove an object came from the
+	// object plane rather than from gossip. Judging readiness on the tx lane
+	// would arm the submitter while blind to exactly the evidence it needs —
+	// which is how a cluster ends up republishing another cluster's subtrees.
+	need := map[string]bool{"subtree": true, "block": true}
 	return func() bool {
 		if time.Since(started) < grace {
 			return false
@@ -585,13 +592,14 @@ func submitterReady(laneSet []*lanes.Lane, started time.Time, grace time.Duratio
 			return true
 		}
 		for _, l := range laneSet {
-			if l.Stats().Active > 0 {
-				if announced.CompareAndSwap(false, true) {
-					log.Info("reverse path armed: delivery is live, origin filter is trustworthy")
-				}
-				return true
+			st := l.Stats()
+			if need[st.Name] && st.Active == 0 {
+				return false
 			}
 		}
-		return false
+		if announced.CompareAndSwap(false, true) {
+			log.Info("reverse path armed: class lanes are live, origin filter is trustworthy")
+		}
+		return true
 	}
 }
