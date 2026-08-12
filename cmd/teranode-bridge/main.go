@@ -98,7 +98,7 @@ func main() {
 
 		mineTag = flag.String("mine-tag", "", "this cluster's coinbase_arbitrary_text (e.g. /teranode1/); when set, only blocks whose coinbase carries it are published up — stateless origin detection with no Teranode change")
 
-		txBatch      = flag.Int("tx-batch", 512, "transactions per batch submit (POST /txs, server cap 1024); 0 keeps legacy per-tx POST /tx")
+		txBatch      = flag.Int("tx-batch", 512, "transactions per batch submit (POST /txs); 1-1024, out-of-range values are clamped")
 		txBatchBytes = flag.Int("tx-batch-bytes", 8<<20, "batch body ceiling in bytes (server cap 32 MiB)")
 		txLinger     = flag.Duration("tx-linger", 2*time.Millisecond, "max age of a non-full batch before it is sent")
 		txInflight   = flag.Int("tx-inflight", 4, "concurrent batch submissions in flight")
