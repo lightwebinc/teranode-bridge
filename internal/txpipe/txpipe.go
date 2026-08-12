@@ -29,6 +29,11 @@
 //     txid, so failures are re-attributed to batch members and retried
 //     individually — missing-parent resolves once the parent lands, which is
 //     bounded-retry, not fail-forever.
+//   - 429: the endpoint's rate limiter refused the request before reading it.
+//     No member was processed, but splitting the batch into per-member retries
+//     would multiply the request rate by the batch size against the very
+//     limiter that just refused us, so a rate-limited batch backs off and is
+//     retried WHOLE, and never enters per-member salvage.
 //   - anything else / transport error: the whole batch is retried once on the
 //     next endpoint, then counted failed.
 //
@@ -86,12 +91,30 @@ type Config struct {
 	Builders int
 }
 
+// maxServerBatchTxs is the largest batch propagation will ACCEPT, which is one
+// less than the limit its constant names. Server.go checks
+// `totalNrTransactions >= maxTransactionsPerRequest` (1024) at the TOP of the
+// read loop, so the 1024th transaction is read, dispatched and processed, and
+// only then does the loop re-enter, trip the check and answer 400. A batch of
+// exactly 1024 is therefore fully applied AND reported as failed — the worst
+// of both, since every member would be resubmitted as a duplicate. 1023 is the
+// real cap.
+const maxServerBatchTxs = 1023
+
+// rateLimitBackoff is the whole-batch retry ladder for 429. Propagation's HTTP
+// limiter is per source IP AND per endpoint (Server.go: HTTPRateLimit), so a
+// bridge saturating one endpoint is throttled while a sibling endpoint is
+// still free — hence the failover attempt happens first and this ladder only
+// covers the case where every endpoint is throttled at once. Var, not const,
+// so tests can shorten it.
+var rateLimitBackoff = []time.Duration{20 * time.Millisecond, 80 * time.Millisecond, 320 * time.Millisecond}
+
 func (c *Config) defaults() {
 	if c.BatchTxs <= 0 {
 		c.BatchTxs = 512
 	}
-	if c.BatchTxs > 1024 {
-		c.BatchTxs = 1024 // server-side maxTransactionsPerRequest
+	if c.BatchTxs > maxServerBatchTxs {
+		c.BatchTxs = maxServerBatchTxs
 	}
 	if c.BatchBytes <= 0 {
 		c.BatchBytes = 8 << 20
@@ -150,7 +173,7 @@ type Pipe struct {
 	// counters, read via Stats
 	enqueued, accepted, rejected, failed     atomic.Uint64
 	retried, retryAccepted, unattributed     atomic.Uint64
-	batches                                  atomic.Uint64
+	batches, rateLimited                     atomic.Uint64
 	sealSize, sealBytes, sealLinger, sealDep atomic.Uint64
 }
 
@@ -181,7 +204,7 @@ func New(cfg Config, log *slog.Logger) (*Pipe, error) {
 		log:    log,
 		ins:    ins,
 		sem:    make(chan struct{}, cfg.Inflight),
-		rtxid:  regexp.MustCompile(`[0-9a-f]{64}`),
+		rtxid:  regexp.MustCompile(`\[([0-9a-f]{64})\]`),
 	}, nil
 }
 
@@ -326,7 +349,10 @@ func (p *Pipe) submit(ctx context.Context, b *batch) {
 	p.batches.Add(1)
 	n := uint64(len(b.jobs))
 
-	for attempt := 0; attempt < 2; attempt++ {
+	// Endpoint refusals get one failover attempt each; rate-limit refusals are
+	// transient and get their own bounded ladder without consuming that budget.
+	throttled := 0
+	for attempt := 0; attempt-throttled < 2; attempt++ {
 		ep := p.cfg.Endpoints[int(p.next.Add(1)-1)%len(p.cfg.Endpoints)]
 		status, body, err := p.post(ctx, ep+"/txs", b.body.Bytes())
 		switch {
@@ -344,6 +370,27 @@ func (p *Pipe) submit(ctx context.Context, b *batch) {
 			// failed txids from the error lines and retry those individually.
 			p.settlePartial(ctx, b, body)
 			return
+
+		case status == http.StatusTooManyRequests:
+			// Refused by the endpoint's limiter before the body was read, so
+			// no member was processed. Per-member salvage would turn one
+			// refused batch into len(b.jobs) requests aimed at the limiter
+			// that just refused us, so back off and retry the batch WHOLE.
+			p.rateLimited.Add(1)
+			if throttled >= len(rateLimitBackoff) {
+				p.log.Warn("txpipe: batch still rate-limited after backoff ladder",
+					"endpoint", ep, "txs", n)
+				p.failed.Add(n)
+				return
+			}
+			select {
+			case <-time.After(rateLimitBackoff[throttled]):
+			case <-ctx.Done():
+				p.failed.Add(n)
+				return
+			}
+			throttled++
+			continue
 
 		default:
 			p.log.Warn("txpipe: batch refused", "endpoint", ep, "status", status,
@@ -379,23 +426,29 @@ func (p *Pipe) submit(ctx context.Context, b *batch) {
 // from the accepted remainder. The counter exists so an operator can see that
 // the batch's outcome was partly unknowable rather than silently good.
 func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
-	failedIDs := make(map[string]struct{})
-	for _, m := range p.rtxid.FindAllString(body, -1) {
-		failedIDs[m] = struct{}{}
-	}
 	mine := make(map[string]struct{}, len(b.jobs))
+	for _, j := range b.jobs {
+		mine[j.id.Display()] = struct{}{}
+	}
+
+	failedIDs := make(map[string]struct{})
+	unattributed := 0
+	for _, line := range strings.Split(body, "\n") {
+		id, ok := p.subjectTxID(line)
+		if !ok {
+			continue // not a per-transaction error line
+		}
+		if _, ours := mine[id]; ours {
+			failedIDs[id] = struct{}{}
+			continue
+		}
+		unattributed++
+	}
+
 	var toRetry []job
 	for _, j := range b.jobs {
-		d := j.id.Display()
-		mine[d] = struct{}{}
-		if _, ok := failedIDs[d]; ok {
+		if _, ok := failedIDs[j.id.Display()]; ok {
 			toRetry = append(toRetry, j)
-		}
-	}
-	unattributed := 0
-	for id := range failedIDs {
-		if _, ok := mine[id]; !ok {
-			unattributed++
 		}
 	}
 	if unattributed > 0 {
@@ -424,6 +477,23 @@ func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
 			p.retryOne(ctx, j)
 		}(j)
 	}
+}
+
+// subjectTxID returns the transaction an error line is ABOUT.
+//
+// Matching every 64-hex token in the body is wrong, and wrong in the direction
+// that corrupts accounting: propagation's messages quote hashes that are not
+// the subject — "[ProcessTransaction][<txid>] duplicate input found:
+// <prevTxID>:<vout>" carries two. The prevout belongs to a transaction that is
+// almost never a batch member, so every such line would book one phantom
+// unattributed failure and subtract a real acceptance. The subject is the one
+// the error convention BRACKETS; a prevout or a quoted body never is.
+func (p *Pipe) subjectTxID(line string) (string, bool) {
+	m := p.rtxid.FindStringSubmatch(line)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
 }
 
 // retryOne resubmits a single transaction on the /tx endpoint with a short
@@ -579,7 +649,7 @@ func varInt(b []byte, off int) (uint64, int, error) {
 type Stats struct {
 	Enqueued, Accepted, Rejected, Failed     uint64
 	Retried, RetryAccepted, Unattributed     uint64
-	Batches                                  uint64
+	Batches, RateLimited                     uint64
 	SealSize, SealBytes, SealLinger, SealDep uint64
 	Queue                                    int
 }
@@ -595,8 +665,8 @@ func (p *Pipe) Stats() Stats {
 		Rejected: p.rejected.Load(), Failed: p.failed.Load(),
 		Retried: p.retried.Load(), RetryAccepted: p.retryAccepted.Load(),
 		Unattributed: p.unattributed.Load(),
-		Batches:      p.batches.Load(),
-		SealSize:     p.sealSize.Load(), SealBytes: p.sealBytes.Load(),
+		Batches:      p.batches.Load(), RateLimited: p.rateLimited.Load(),
+		SealSize: p.sealSize.Load(), SealBytes: p.sealBytes.Load(),
 		SealLinger: p.sealLinger.Load(), SealDep: p.sealDep.Load(),
 		Queue: q,
 	}

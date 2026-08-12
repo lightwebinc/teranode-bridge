@@ -58,9 +58,12 @@ up() {
 }
 
 # Sum of validatortxs high-watermarks == transactions propagation accepted.
+# count sums the topic's high watermarks. Uses --format json rather than
+# column positions: rpk's table layout is not a stable interface, and a silent
+# column shift would misreport throughput instead of failing.
 count() {
-  docker exec propbench-kafka rpk topic describe validatortxs -p \
-    | awk 'NR>1{s+=$6} END{print s+0}'
+  docker exec propbench-kafka rpk topic describe validatortxs -p --format json \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); ps=d.get("partitions") or d; print(sum(p["high_watermark"] for p in ps))'
 }
 
 down() {

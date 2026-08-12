@@ -53,6 +53,10 @@ var (
 		"Transactions re-submitted individually after a partial batch failure (missing-parent resolves once the parent lands).", nil, nil)
 	pipeRetryOK = prometheus.NewDesc("btb_txpipe_retry_accepted_total",
 		"Retried transactions the cluster then accepted.", nil, nil)
+	pipeUnattributed = prometheus.NewDesc("btb_txpipe_unattributed_total",
+		"Error lines in a partial-failure response that named no member of the batch they answered. The outcome of that many transactions is UNKNOWN — they are excluded from `accepted` rather than assumed good, so a non-zero rate here means delivery counts are incomplete, not that delivery failed.", nil, nil)
+	pipeRateLimited = prometheus.NewDesc("btb_txpipe_rate_limited_total",
+		"Batches refused by a propagation endpoint's HTTP rate limiter (429). The limiter is per source IP and per endpoint, so a sustained rate here means one bridge is saturating one endpoint — add endpoints or raise the server's limit; batch size will not help.", nil, nil)
 	pipeQueue = prometheus.NewDesc("btb_txpipe_queue_depth",
 		"Transactions waiting in the pipe. At the ceiling, backpressure blocks the lane read loop.", nil, nil)
 
@@ -109,6 +113,8 @@ func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 		laneConns, laneObjects, laneBytes, laneErrors, laneDropped,
 		cacheEntries, cacheBytes, cacheStored, cacheHits, cacheMisses, cacheEvicted, cacheExpired,
 		registryEntries, registryDups, submitTotal, announceTotal, announceFailures,
+		pipeBatches, pipeSeals, pipeRetried, pipeRetryOK,
+		pipeUnattributed, pipeRateLimited, pipeQueue,
 		retrievalServed, retrievalMisses, retrievalErrors,
 		reversePublished, reverseSkipped, reverseFailures, reverseReconnects,
 		upObjects, upBytes, upFailures, upRedials,
@@ -163,6 +169,8 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(pipeSeals, float64(s.SealDep), "dependency")
 		counter(pipeRetried, float64(s.Retried))
 		counter(pipeRetryOK, float64(s.RetryAccepted))
+		counter(pipeUnattributed, float64(s.Unattributed))
+		counter(pipeRateLimited, float64(s.RateLimited))
 		gauge(pipeQueue, float64(s.Queue))
 	}
 

@@ -142,7 +142,7 @@ coupled throughput to cluster latency (1/RTT per connection); batching decouples
 them, and backpressure — a full pipeline queue blocks the lane, closing the TCP
 window — bounds memory when the cluster is slower than the fabric.
 
-Sizing: `-tx-batch`/`-tx-batch-bytes` (server caps 1024 / 32 MiB), `-tx-linger`
+Sizing: `-tx-batch`/`-tx-batch-bytes` (clamped to 1023 / 30 MiB), `-tx-linger`
 (latency bound when quiet), `-tx-inflight` (concurrent batch requests),
 `-tx-builders` (parallel accumulators, routed by txid). The `/txs` contract —
 a request must not contain both a parent and its child, because in-batch

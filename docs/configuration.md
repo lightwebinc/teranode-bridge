@@ -126,8 +126,8 @@ is a flag flip, not a cold start.
 ## Transaction pipeline
 
 The tx lane never submits synchronously: objects are enqueued to a batching
-pipeline that ships them on propagation's `POST /txs` endpoint (server caps:
-1024 txs / 32 MiB per request). The lane read loop's only costs are parse,
+pipeline that ships them on propagation's `POST /txs` endpoint (effective caps:
+1023 txs / 32 MiB per request). The lane read loop's only costs are parse,
 hash, one copy, and an enqueue — measured at >1.4M tx/s sustained on a 2×18-core
 host against a mock sink, with backpressure (a full queue blocks the lane, which
 closes the TCP window) bounding memory when the cluster is slower than the
@@ -135,15 +135,22 @@ fabric.
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `-tx-batch` | `512` | Transactions per batch (capped at the server's 1024). |
+| `-tx-batch` | `512` | Transactions per batch (clamped to 1023 — see note). |
 | `-tx-batch-bytes` | `8388608` | Batch body ceiling (capped under the server's 32 MiB). |
 | `-tx-linger` | `2ms` | Max age of a non-full batch — bounds added latency when quiet. |
 | `-tx-inflight` | `4` | Concurrent batch requests. Throughput ≈ inflight × batch / RTT. |
 | `-tx-builders` | `4` | Parallel batch builders (power of two, ≤16); txs route to builders by txid. |
 | `-tx-retries` | `3` | Per-tx retries for failures that resolve with time (missing parent). `0` disables. |
 
-Two contract details worth knowing:
+Three contract details worth knowing:
 
+- **The batch cap is 1023, not 1024**: propagation checks
+  `totalNrTransactions >= maxTransactionsPerRequest` at the *top* of its read
+  loop, so a request holding exactly 1024 transactions is read, dispatched and
+  fully processed — and only then answered `400`. Batching at the advertised
+  limit therefore delivers every member *and* reports the batch as failed,
+  which would resubmit all 1024 as duplicates. `-tx-batch` is clamped to 1023
+  for that reason; raising it above that has no effect.
 - **Parent/child**: propagation processes a batch concurrently, and its handler
   documents that a request must not contain both a parent and its child. The
   pipe walks each transaction's input outpoints and **seals** the open batch
@@ -152,7 +159,20 @@ Two contract details worth knowing:
   (`422` = missing parent, the only use of that status).
 - **Partial failure**: a batch answering `500 Failed to process transactions`
   had its other members processed; the failed txids are parsed from the error
-  lines and retried individually.
+  lines and retried individually. Attribution reads only the txid the error
+  convention *brackets* — messages such as `duplicate input found: <hash>:<n>`
+  quote a second hash that is not the subject, and counting it would book a
+  phantom failure against a batch member that in fact succeeded. Any error line
+  naming no member of the batch it answers is counted in
+  `btb_txpipe_unattributed_total` and excluded from `accepted`, because that
+  batch's outcome is partly unknown rather than good.
+- **Rate limiting**: propagation's HTTP limiter is per source IP **and** per
+  endpoint. A `429` means nothing in the batch was processed, so the pipe
+  retries the batch *whole* (never splitting it into per-member requests, which
+  would multiply the request rate by the batch size against the limiter that
+  just refused it) and counts `btb_txpipe_rate_limited_total`. A sustained
+  non-zero rate means one bridge is saturating one endpoint — add endpoints or
+  raise the server's limit; batch size will not help.
 
 ## Origin detection (`-mine-tag`)
 

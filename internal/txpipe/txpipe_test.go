@@ -336,3 +336,127 @@ func TestWholeBatchFailureSalvages(t *testing.T) {
 		t.Fatalf("failed = %d, want 0 — members were salvageable", s.Failed)
 	}
 }
+
+// TestDuplicateInputLineAttributesToSubject pins the fix for a real
+// accounting corruption: propagation's duplicate-input error quotes TWO
+// 64-hex hashes — the subject transaction and the prevout it double-spends —
+// and matching every hex token in the body booked the prevout as a phantom
+// unattributed failure, subtracting a genuine acceptance for every such line.
+// Only the bracketed subject names a transaction the batch is answering for.
+func TestDuplicateInputLineAttributesToSubject(t *testing.T) {
+	a := rawTx([32]byte{21}, 21)
+	b := rawTx([32]byte{22}, 22)
+	idA := txidOf(t, a)
+	prevout := strings.Repeat("cd", 32) // a hash that is NOT a batch member
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusInternalServerError)
+		// Verbatim shape of Server.go's duplicate-input rejection.
+		_, _ = fmt.Fprintf(w, "Failed to process transactions:\nTX_INVALID (69): [ProcessTransaction][%s] duplicate input found: %s:0\n",
+			idA.Display(), prevout)
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		Endpoints: []string{srv.URL},
+		BatchTxs:  10, Linger: 5 * time.Millisecond, Inflight: 1, Builders: 1, RetryAttempts: 0,
+	}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = p.Run(ctx) }()
+
+	for _, raw := range [][]byte{a, b} {
+		if err := p.Enqueue(ctx, raw, txidOf(t, raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// One member named, one silent: exactly one rejected and one accepted.
+	waitFor(t, func() bool { return p.Stats().Rejected == 1 })
+	s := p.Stats()
+	if s.Unattributed != 0 {
+		t.Errorf("unattributed = %d, want 0 — the prevout hash is not a failed transaction", s.Unattributed)
+	}
+	if s.Accepted != 1 {
+		t.Errorf("accepted = %d, want 1 — the unnamed member was processed", s.Accepted)
+	}
+}
+
+// TestBatchTxsClampedBelowServerCap pins the off-by-one in propagation's
+// batch guard. Server.go checks `totalNrTransactions >= maxTransactionsPerRequest`
+// at the TOP of its read loop, so a batch of exactly 1024 is read, processed
+// and published in full, and only then answered 400. Batching at the limit
+// would make every member land AND be resubmitted as a duplicate, so the pipe
+// must clamp strictly below it.
+func TestBatchTxsClampedBelowServerCap(t *testing.T) {
+	for _, req := range []int{1024, 5000} {
+		c := Config{Endpoints: []string{"http://127.0.0.1:1"}, BatchTxs: req}
+		c.defaults()
+		if c.BatchTxs != 1023 {
+			t.Errorf("BatchTxs %d clamped to %d, want 1023", req, c.BatchTxs)
+		}
+	}
+	// A request below the cap is left alone.
+	c := Config{Endpoints: []string{"http://127.0.0.1:1"}, BatchTxs: 256}
+	c.defaults()
+	if c.BatchTxs != 256 {
+		t.Errorf("BatchTxs = %d, want 256 untouched", c.BatchTxs)
+	}
+}
+
+// TestRateLimitRetriesWholeBatch pins that a 429 never fans out. Propagation
+// rate-limits per source IP per endpoint, so splitting a refused batch into
+// per-member requests would multiply the request rate by the batch size
+// against the limiter that just refused it. The batch must be retried whole.
+func TestRateLimitRetriesWholeBatch(t *testing.T) {
+	orig := rateLimitBackoff
+	rateLimitBackoff = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { rateLimitBackoff = orig })
+
+	var batchCalls, singleCalls atomic.Int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("/txs", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		// Throttle the first two attempts, then accept the whole batch.
+		if batchCalls.Add(1) <= 2 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/tx", func(w http.ResponseWriter, r *http.Request) {
+		singleCalls.Add(1)
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	p, err := New(Config{
+		Endpoints: []string{srv.URL},
+		BatchTxs:  10, Linger: 5 * time.Millisecond, Inflight: 1, Builders: 1, RetryAttempts: 3,
+	}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = p.Run(ctx) }()
+
+	for i := 0; i < 4; i++ {
+		raw := rawTx([32]byte{31}, byte(i))
+		if err := p.Enqueue(ctx, raw, txidOf(t, raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, func() bool { return p.Stats().Accepted == 4 })
+	if got := singleCalls.Load(); got != 0 {
+		t.Errorf("/tx called %d times — a throttled batch must not fan out into per-member requests", got)
+	}
+	if s := p.Stats(); s.RateLimited != 2 {
+		t.Errorf("RateLimited = %d, want 2", s.RateLimited)
+	}
+}

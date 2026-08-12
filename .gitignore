@@ -24,3 +24,9 @@ go.work.sum
 
 # Logs
 *.log
+
+# Bench harness binaries (built with: go build ./hack/...)
+/tnbench
+/propload
+/hack/propbench/propload/propload
+/hack/propbench/propload/propbench-propload
