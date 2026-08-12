@@ -1,0 +1,95 @@
+# propbench — propagation-only Teranode, for measuring the bridge -> cluster
+# ingest edge without a fully-resourced cluster.
+#
+# Runs exactly three containers: redpanda, Teranode's blockchain service (FSM
+# forced to RUNNING, SQLite store) and Teranode's propagation service. There is
+# no validator, no UTXO store, no block assembly, no asset service — propagation
+# does its real production work (parse, sanity checks, tx-store write, Kafka
+# publish) and the validatortxs topic is the sink.
+#
+#   docker compose -f hack/propbench/docker-compose.yml up -d
+#   curl -s -XPOST --data-binary @batch.bin http://127.0.0.1:18833/txs
+#   docker exec propbench-kafka rpk topic describe validatortxs -p
+#
+# Server-side accounting: the sum of validatortxs high-watermarks IS the number
+# of transactions propagation accepted. Client-side counters must agree with it.
+#
+# TERANODE_IMAGE must be built from the teranode checkout you are measuring
+# (`docker build -t teranode:local .`); settings baked into an older image
+# will silently change what you measure.
+
+name: propbench
+
+services:
+  kafka:
+    container_name: propbench-kafka
+    image: redpandadata/redpanda:latest
+    networks: [propbench]
+    command:
+      - redpanda start
+      - --smp 4
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://kafka:9092
+
+  blockchain:
+    container_name: propbench-blockchain
+    image: ${TERANODE_IMAGE:-teranode:latest}
+    networks: [propbench]
+    depends_on: [kafka]
+    entrypoint: ["./teranode.run", "-all=0", "-blockchain=1"]
+    environment:
+      SETTINGS_CONTEXT: docker.m
+      logLevel: INFO
+      # SQLite is enough: this service exists only to own the FSM and to back
+      # propagation's blob-deletion scheduler. No blocks are ever produced.
+      blockchain_store: sqlite:///blockchain
+      blockchain_grpcListenAddress: ":8087"
+      # Propagation blocks in Start() on WaitUntilFSMTransitionFromIdleState.
+      # This is the settings-only way out of IDLE (no teranode-cli call needed).
+      local_test_start_from_state: RUNNING
+      # Non-empty or the blockchain service refuses to start.
+      kafka_blocksFinalConfig: kafka://kafka:9092/blocks-final?partitions=1&replication=1&retention=60000
+      prometheusEndpoint: /metrics
+      profilerAddr: ":6060"
+
+  propagation:
+    container_name: propbench-propagation
+    image: ${TERANODE_IMAGE:-teranode:latest}
+    networks: [propbench]
+    depends_on: [blockchain]
+    entrypoint: ["./teranode.run", "-all=0", "-propagation=1"]
+    ports:
+      - "18833:8833"   # POST /txs, POST /tx, GET /health
+      - "16060:6060"   # /metrics, /debug/pprof
+    environment:
+      SETTINGS_CONTEXT: docker.m
+      logLevel: INFO
+      blockchain_grpcAddress: blockchain:8087
+      # Blackhole tx blob store. This is the settings.conf DEFAULT for txstore,
+      # so it is production-faithful, not a shortcut.
+      txstore: "null:///"
+      # false => validator client is a LAZY gRPC client that is never dialled,
+      # because the Kafka producer below is non-nil and takes the hot path.
+      # Leaving this true drags in the UTXO store AND a block-assembly client.
+      useLocalValidator: "false"
+      validator_grpcAddress: "127.0.0.1:8081"   # must be non-empty; never used
+      # The real production hand-off. Nothing consumes this topic in the rig.
+      kafka_validatortxsConfig: kafka://kafka:9092/validatortxs?partitions=8&replication=1&retention=60000&flush_bytes=1048576&flush_messages=10000&flush_frequency=10ms
+      propagation_grpcListenAddress: ":8084"
+      propagation_httpListenAddress: ":8833"
+      # 0 disables. The DEFAULT is 1024 requests/s PER SOURCE IP, which caps a
+      # single bridge at 1024 batches/s no matter how fast either side is. Run
+      # with 0 to find the code's ceiling; run with 1024 to reproduce what a
+      # real deployment does to the bridge.
+      propagation_httpRateLimit: "0"
+      # 0 = unbounded goroutines (one per tx, per in-flight batch). Production
+      # guidance in the setting's own docs is 256.
+      propagation_batchConcurrencyLimit: "0"
+      propagation_httpBodyLimit: 100MB
+      prometheusEndpoint: /metrics
+      profilerAddr: ":6060"
+
+networks:
+  propbench:

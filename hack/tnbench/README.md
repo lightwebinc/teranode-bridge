@@ -1,15 +1,32 @@
 # tnbench
 
-The loopback rig behind the bridge's throughput numbers (1.47M tx/s sustained,
-2×18-core host). Two subcommands, run from this directory with `go run .`:
+The loopback rig behind the bridge's throughput and batch-contract numbers.
+Two commands, run from this directory with `go run .`:
 
-    go run . mock -listen 127.0.0.1:20833      # propagation stand-in: /tx, /txs, /health
-    go run . feed -addr 127.0.0.1:28833 -conns 24 -dur 30s
+    go run . mock -listen 127.0.0.1:20833 [-faithful]
+    go run . feed -addr 127.0.0.1:28833 -conns 24 -dur 30s [-chain]
 
 Start the real bridge between them (lanes on loopback, `-propagation` at the
-mock) and read the rate off `btb_lane_objects_total{lane="tx"}` deltas. The
-crafted 70-byte transactions are codec-validated (objfmt.TxSize == 70); if the
-template is ever changed, re-validate before trusting a run.
+mock) and read rates off `btb_lane_objects_total{lane="tx"}` deltas.
 
-The mock accepts everything, so this measures the BRIDGE's ceiling, not the
-cluster's: it proves the bridge is not the bottleneck, nothing more.
+## The ladder — what each rung proves, and what it does not
+
+| Rig | Measured | Proves | Does NOT prove |
+| --- | --- | --- | --- |
+| `mock` (blind sink) | **1.48M tx/s** | the bridge is not the bottleneck: parse, hash, one copy, enqueue, batch, write | nothing about a cluster; no error paths are reached |
+| `mock -faithful` | **447k tx/s** | the batch body is well-formed, delimits with the real codec, and every txid is computable — and the accounting/retry paths run under load | a ceiling: the mock itself hashes every tx, so this number is largely ITS cost |
+| `mock -faithful` + `feed -chain` | **151k tx/s** | **the /txs parent-child contract holds under adversarial load**: 360k dependency seals, **zero** missing-parent errors from a mock that enforces the rule | throughput — a fully-chained stream is the pathological case; real traffic mixes |
+| real Teranode, low rate | correctness end to end | the cluster accepts, validates and stores what the bridge sends | high-rate behaviour — the lab cannot run Teranode that hard |
+
+The honest summary: rungs 1-3 bound and exercise **the bridge**; only a real
+cluster bounds **the system**, and its propagation service has its own batch
+worker pool that will bound it well below these numbers.
+
+## Notes
+
+The crafted 70-byte transactions are codec-validated (`objfmt.TxSize` == 70). If
+the template changes, re-validate before trusting a run — a rig that emits
+subtly invalid transactions measures the error path, not the happy path.
+
+`-faithful` keeps a txid set, not a UTXO store: a real spend graph would make
+the mock the bottleneck long before the bridge.
