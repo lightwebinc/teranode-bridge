@@ -47,6 +47,15 @@ type Lane struct {
 // until every lane is bound the bridge cannot accept delivery.
 func (l *Lane) Bound() bool { return l.bound.Load() }
 
+// ListenerAddr returns the bound address, or nil before Serve binds. It exists
+// for tests and diagnostics that start lanes on port 0.
+func (l *Lane) ListenerAddr() net.Addr {
+	if !l.bound.Load() || l.listener == nil {
+		return nil
+	}
+	return l.listener.Addr()
+}
+
 // Counters are per-lane totals, read via Stats.
 type Counters struct {
 	Conns   atomic.Uint64
@@ -185,6 +194,17 @@ func (l *Lane) serveConn(ctx context.Context, conn net.Conn) {
 				l.Log.Error("lane framing error, dropping connection",
 					"lane", l.Name, "remote", remote, "objects", onConn, "err", err)
 			}
+			return
+		}
+		if l.MaxObject > 0 && len(obj) > l.MaxObject {
+			// The reader's bound only fires while ACCUMULATING an object;
+			// one that arrives whole in a single read sails past it. The
+			// ceiling is a policy, not a buffering detail, so enforce it on
+			// delivery too — and as with any framing fault there is no
+			// resync point, so the connection goes.
+			l.counts.Dropped.Add(1)
+			l.Log.Error("lane object exceeds ceiling, dropping connection",
+				"lane", l.Name, "remote", remote, "bytes", len(obj), "max", l.MaxObject)
 			return
 		}
 		onConn++

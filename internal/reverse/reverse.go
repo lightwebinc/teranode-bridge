@@ -107,14 +107,23 @@ type Subscriber struct {
 	build Builder
 	log   *slog.Logger
 
-	conn *grpc.ClientConn
+	conn   *grpc.ClientConn
+	active atomic.Bool
 
 	subtreesUp, blocksUp             atomic.Uint64
 	remoteSkipped, skipped, failures atomic.Uint64
-	gated                            atomic.Uint64
+	gated, standbyHeld               atomic.Uint64
 	foreignSkipped                   atomic.Uint64
 	reconnects                       atomic.Uint64
 }
+
+// SetActive flips whether this subscriber holds the submitter role. A standby
+// keeps its subscription, registry and origin filter warm — promotion is a
+// flag flip, not a cold start — but publishes nothing while inactive.
+func (s *Subscriber) SetActive(v bool) { s.active.Store(v) }
+
+// Active reports whether this subscriber currently publishes.
+func (s *Subscriber) Active() bool { return s.active.Load() }
 
 // New dials the blockchain service. The listener is plaintext and
 // unauthenticated in this deployment.
@@ -213,6 +222,14 @@ func (s *Subscriber) publish(ctx context.Context, class string, hash hashid.Hash
 	if pub == nil {
 		return
 	}
+	if !s.active.Load() {
+		// Standby: the role lives elsewhere. Held, not lost — if this bridge
+		// is promoted the cluster's own p2p re-announces recent content, and
+		// anything still flowing arrives as fresh notifications.
+		s.standbyHeld.Add(1)
+		s.log.Debug("standby: holding publish", "class", class, "hash", hash.Display())
+		return
+	}
 	if s.cfg.Ready != nil && !s.cfg.Ready() {
 		s.gated.Add(1)
 		s.log.Info("not publishing yet: no live view of the object plane",
@@ -279,6 +296,11 @@ type Stats struct {
 	// ForeignSkipped counts block notifications whose coinbase carried another
 	// cluster's tag — gossip-learned blocks correctly not republished.
 	ForeignSkipped uint64
+	// StandbyHeld counts publishes withheld because this bridge does not hold
+	// the submitter role.
+	StandbyHeld uint64
+	// Active reports whether the submitter role is currently held.
+	Active bool
 }
 
 // Stats returns a snapshot of the reverse path's counters.
@@ -292,6 +314,8 @@ func (s *Subscriber) Stats() Stats {
 		Reconnects:     s.reconnects.Load(),
 		Gated:          s.gated.Load(),
 		ForeignSkipped: s.foreignSkipped.Load(),
+		StandbyHeld:    s.standbyHeld.Load(),
+		Active:         s.active.Load(),
 	}
 }
 

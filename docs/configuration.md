@@ -102,9 +102,26 @@ The gRPC connection to the blockchain service is **plaintext and
 unauthenticated**. Keep it on a trusted LAN.
 
 With `-submitter=false` the subscriber still connects and still runs its origin
-filter (so `remote_skipped` keeps counting), but it publishes nothing and makes
-no asset fetches. That makes a standby bridge a hot spare: promotion is a flag
-flip and a restart.
+filter (so `remote_skipped` keeps counting), but it publishes nothing — held
+publishes count in `btb_reverse_skipped_total{reason="standby"}`. That makes a
+standby bridge a hot spare.
+
+### Health-gated failover (`-submitter-probe`)
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-submitter-probe` | `""` | The PRIMARY bridge's `/readyz` URL. Set on a **standby** (`-submitter=false`); ignored with a warning on a configured primary. |
+
+The standby probes the primary every 2 s. Five consecutive failures **promote**
+it (it starts publishing, `btb_submitter_active` flips to 1, log line `PROMOTED
+to submitter`); ten consecutive successes demote it again. Demotion is
+deliberately slower than promotion so a flapping primary cannot flap the role,
+and the failure envelope is benign in both directions: a dead primary costs
+~10 s of publish gap (the failure model's existing "gap until promoted", now
+seconds instead of a pager), and a false promotion costs a window of
+dual-publish that every receiver's hash dedup absorbs. The standby's
+subscription, seen-registry and origin filter run the whole time, so promotion
+is a flag flip, not a cold start.
 
 ## Transaction pipeline
 

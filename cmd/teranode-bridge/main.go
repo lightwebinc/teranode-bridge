@@ -85,6 +85,7 @@ func main() {
 		subtreePort = flag.Int("edge-subtree-port", 8726, "edge ingress port for BRC-143 subtree submits")
 		blockPort   = flag.Int("edge-block-port", 8727, "edge ingress port for BRC-144 block submits")
 		submitter   = flag.Bool("submitter", true, "hold the submitter role for this cluster; exactly one bridge per class should")
+		submitProbe = flag.String("submitter-probe", "", "primary bridge /readyz URL; set on a STANDBY (-submitter=false) to auto-promote when the primary dies and demote when it returns")
 
 		mode       = flag.String("mode", "all", "all = full bridge; sink = receive, verify and count only (no cluster targets)")
 		cacheBytes = flag.Int64("cache-bytes", 1<<30, "object cache ceiling in bytes")
@@ -228,11 +229,12 @@ func main() {
 			log.Error("-blockchain also requires -local-asset and -edge-ingress")
 			os.Exit(2)
 		}
+		// Publishers exist regardless of role: a standby keeps them warm so
+		// promotion is a flag flip, not a construction path.
+		upSubtree = &submit.UpTunnel{Addr: net.JoinHostPort(*edgeIngress, strconv.Itoa(*subtreePort)), Class: "subtree", Log: log}
+		upBlock = &submit.UpTunnel{Addr: net.JoinHostPort(*edgeIngress, strconv.Itoa(*blockPort)), Class: "block", Log: log}
 		if !*submitter {
-			log.Info("submitter role disabled; the reverse path stays idle on this bridge")
-		} else {
-			upSubtree = &submit.UpTunnel{Addr: net.JoinHostPort(*edgeIngress, strconv.Itoa(*subtreePort)), Class: "subtree", Log: log}
-			upBlock = &submit.UpTunnel{Addr: net.JoinHostPort(*edgeIngress, strconv.Itoa(*blockPort)), Class: "block", Log: log}
+			log.Info("starting as standby: reverse path subscribed but not publishing")
 		}
 		asset := tnasset.New(*localAsset, 30*time.Second)
 		rev, err = reverse.New(reverse.Config{
@@ -251,6 +253,12 @@ func main() {
 		defer func() { _ = rev.Close() }()
 		log.Info("reverse path enabled", "blockchain", *blockchain, "asset", *localAsset,
 			"edge_ingress", *edgeIngress, "submitter", *submitter)
+		rev.SetActive(*submitter)
+		if *submitProbe != "" {
+			if *submitter {
+				log.Warn("-submitter-probe is a STANDBY setting; ignored on a configured primary")
+			}
+		}
 	}
 
 	// Point the recorder at every live subsystem now that they all exist. Nil
@@ -278,6 +286,12 @@ func main() {
 	}
 	if rev != nil {
 		g.Go(func() error { return rev.Run(gctx) })
+		if *submitProbe != "" && !*submitter {
+			g.Go(func() error {
+				rev.RunPromoter(gctx, reverse.PromoterConfig{ProbeURL: *submitProbe}, log)
+				return nil
+			})
+		}
 	}
 	if *metricsAddr != "" {
 		g.Go(func() error { return rec.Serve(gctx, *metricsAddr) })

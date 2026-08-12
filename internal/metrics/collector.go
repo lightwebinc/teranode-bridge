@@ -74,6 +74,9 @@ var (
 		"Notifications not published. `remote_origin` is the origin filter working as intended (the object came from the fabric); `unavailable` is the asset service not holding it yet.", []string{"reason"}, nil)
 	reverseFailures = prometheus.NewDesc("btb_reverse_failures_total",
 		"Reverse-path failures: asset fetch, frame encode, or upward submit.", nil, nil)
+	submitterActive = prometheus.NewDesc("btb_submitter_active",
+		"1 while this bridge holds the submitter role (publishes cluster output upward), 0 on a standby.", nil, nil)
+
 	reverseReconnects = prometheus.NewDesc("btb_reverse_reconnects_total",
 		"Blockchain notification stream reconnects. Routine — the cluster rolls its gRPC connections.", nil, nil)
 
@@ -187,6 +190,13 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(reverseSkipped, float64(s.RemoteSkipped), "remote_origin")
 		counter(reverseSkipped, float64(s.Skipped), "unavailable")
 		counter(reverseSkipped, float64(s.ForeignSkipped), "foreign_origin")
+		counter(reverseSkipped, float64(s.Gated), "not_ready")
+		counter(reverseSkipped, float64(s.StandbyHeld), "standby")
+		active := 0.0
+		if s.Active {
+			active = 1
+		}
+		gauge(submitterActive, active)
 		counter(reverseFailures, float64(s.Failures))
 		counter(reverseReconnects, float64(s.Reconnects))
 	}
