@@ -85,8 +85,9 @@ func (s *Server) BaseURL(advertise string) string {
 	return strings.TrimRight(advertise, "/") + s.cfg.APIPrefix
 }
 
-// Serve runs until ctx is cancelled.
-func (s *Server) Serve(ctx context.Context) error {
+// Handler builds the route table the cluster pulls against. Separated from
+// Serve so the contract can be exercised without binding a socket.
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	p := s.cfg.APIPrefix
 
@@ -104,9 +105,13 @@ func (s *Server) Serve(ctx context.Context) error {
 	// catchup or convenience route the bridge has no data for. 404 is the honest
 	// answer and keeps us out of the cluster's malicious-peer classification.
 	mux.HandleFunc("/", s.notFound)
+	return mux
+}
 
+// Serve runs until ctx is cancelled.
+func (s *Server) Serve(ctx context.Context) error {
 	s.srv = &http.Server{
-		Handler:           mux,
+		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      10 * time.Minute, // streaming pulls of a large subtree
 		IdleTimeout:       120 * time.Second,
