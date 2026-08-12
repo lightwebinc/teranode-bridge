@@ -149,7 +149,7 @@ type Pipe struct {
 
 	// counters, read via Stats
 	enqueued, accepted, rejected, failed     atomic.Uint64
-	retried, retryAccepted                   atomic.Uint64
+	retried, retryAccepted, unattributed     atomic.Uint64
 	batches                                  atomic.Uint64
 	sealSize, sealBytes, sealLinger, sealDep atomic.Uint64
 }
@@ -351,23 +351,64 @@ func (p *Pipe) submit(ctx context.Context, b *batch) {
 			continue
 		}
 	}
+	// Both endpoints refused the whole batch. Every member is known
+	// undelivered, so salvage them individually rather than writing off n
+	// transactions on one bad request — a batch-shaped fault (an oversized
+	// body, one poisonous member) does not mean the others are unacceptable.
+	if p.cfg.RetryAttempts > 0 {
+		p.log.Warn("txpipe: batch failed on all endpoints; salvaging members individually", "txs", n)
+		for _, j := range b.jobs {
+			p.wg.Add(1)
+			go func(j job) {
+				defer p.wg.Done()
+				p.retryOne(ctx, j)
+			}(j)
+		}
+		return
+	}
 	p.failed.Add(n)
 }
 
 // settlePartial parses the 500 body's error lines, retries the named txids and
 // counts everything else accepted.
+//
+// Attribution is not guaranteed: an error line may name no batch member (a
+// parse error before any txid was read, or a message quoting a foreign hash).
+// Counting the remainder accepted would then overstate delivery, so any
+// unattributed error line is counted as an UNATTRIBUTED failure and subtracted
+// from the accepted remainder. The counter exists so an operator can see that
+// the batch's outcome was partly unknowable rather than silently good.
 func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
 	failedIDs := make(map[string]struct{})
 	for _, m := range p.rtxid.FindAllString(body, -1) {
 		failedIDs[m] = struct{}{}
 	}
+	mine := make(map[string]struct{}, len(b.jobs))
 	var toRetry []job
 	for _, j := range b.jobs {
-		if _, ok := failedIDs[j.id.Display()]; ok {
+		d := j.id.Display()
+		mine[d] = struct{}{}
+		if _, ok := failedIDs[d]; ok {
 			toRetry = append(toRetry, j)
 		}
 	}
-	p.accepted.Add(uint64(len(b.jobs) - len(toRetry)))
+	unattributed := 0
+	for id := range failedIDs {
+		if _, ok := mine[id]; !ok {
+			unattributed++
+		}
+	}
+	if unattributed > 0 {
+		p.unattributed.Add(uint64(unattributed))
+		p.log.Warn("txpipe: batch error lines name no batch member; outcome unknown for that many txs",
+			"count", unattributed, "batch_txs", len(b.jobs), "body", firstLine(body))
+	}
+	// Never let the unknown count inflate accepted.
+	ok := len(b.jobs) - len(toRetry) - unattributed
+	if ok < 0 {
+		ok = 0
+	}
+	p.accepted.Add(uint64(ok))
 
 	if p.cfg.RetryAttempts <= 0 || len(toRetry) == 0 {
 		// Error lines that matched no batch member (parse errors, foreign
@@ -537,7 +578,7 @@ func varInt(b []byte, off int) (uint64, int, error) {
 // Stats is a snapshot for logging and metrics.
 type Stats struct {
 	Enqueued, Accepted, Rejected, Failed     uint64
-	Retried, RetryAccepted                   uint64
+	Retried, RetryAccepted, Unattributed     uint64
 	Batches                                  uint64
 	SealSize, SealBytes, SealLinger, SealDep uint64
 	Queue                                    int
@@ -553,8 +594,9 @@ func (p *Pipe) Stats() Stats {
 		Enqueued: p.enqueued.Load(), Accepted: p.accepted.Load(),
 		Rejected: p.rejected.Load(), Failed: p.failed.Load(),
 		Retried: p.retried.Load(), RetryAccepted: p.retryAccepted.Load(),
-		Batches:  p.batches.Load(),
-		SealSize: p.sealSize.Load(), SealBytes: p.sealBytes.Load(),
+		Unattributed: p.unattributed.Load(),
+		Batches:      p.batches.Load(),
+		SealSize:     p.sealSize.Load(), SealBytes: p.sealBytes.Load(),
 		SealLinger: p.sealLinger.Load(), SealDep: p.sealDep.Load(),
 		Queue: q,
 	}

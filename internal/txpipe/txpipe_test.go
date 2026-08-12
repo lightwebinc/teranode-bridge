@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -151,11 +153,25 @@ func TestPartialFailureRetry(t *testing.T) {
 	var failDisplay string
 
 	mux := http.NewServeMux()
+	// Faithful mock: propagation only names transactions that were actually IN
+	// this request. A mock that names a foreign txid every time would exercise
+	// the unattributed path instead (see TestUnattributedErrorLine).
 	mux.HandleFunc("/txs", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
+		body, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		txsCalls++
 		mu.Unlock()
+		present := false
+		for _, tx := range splitBody(t, body) {
+			if txidOf(t, tx).Display() == failDisplay {
+				present = true
+			}
+		}
+		if !present {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("OK"))
+			return
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = fmt.Fprintf(w, "Failed to process transactions:\n[ProcessTransaction][%s] missing parent\n", failDisplay)
 	})
@@ -241,4 +257,82 @@ func TestInputRefsEF(t *testing.T) {
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// TestUnattributedErrorLine pins the accounting guard: an error line naming a
+// txid that is not a batch member means the batch's outcome is partly
+// UNKNOWN. Those transactions must not be counted accepted — silently
+// overstating delivery is the failure mode this counter exists to prevent.
+func TestUnattributedErrorLine(t *testing.T) {
+	foreign := strings.Repeat("ab", 32)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(w, "Failed to process transactions:\n[ProcessTransaction][%s] unknown\n", foreign)
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		Endpoints: []string{srv.URL},
+		BatchTxs:  10, Linger: 5 * time.Millisecond, Inflight: 1, Builders: 1, RetryAttempts: 0,
+	}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = p.Run(ctx) }()
+
+	a := rawTx([32]byte{9}, 9)
+	if err := p.Enqueue(ctx, a, txidOf(t, a)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return p.Stats().Unattributed == 1 })
+	if s := p.Stats(); s.Accepted != 0 {
+		t.Fatalf("accepted = %d, want 0 — an unknown outcome must never count as delivered", s.Accepted)
+	}
+}
+
+// TestWholeBatchFailureSalvages pins the salvage path: when every endpoint
+// refuses the whole batch, the members are individually retried rather than
+// written off — a batch-shaped fault does not make its members unacceptable.
+func TestWholeBatchFailureSalvages(t *testing.T) {
+	var txCalls atomic.Int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("/txs", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		http.Error(w, "Invalid request body: too much data", http.StatusBadRequest)
+	})
+	mux.HandleFunc("/tx", func(w http.ResponseWriter, _ *http.Request) {
+		txCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	p, err := New(Config{
+		Endpoints: []string{srv.URL},
+		BatchTxs:  10, Linger: 5 * time.Millisecond, Inflight: 1, Builders: 1, RetryAttempts: 2,
+	}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = p.Run(ctx) }()
+
+	for i := 0; i < 3; i++ {
+		tx := rawTx([32]byte{byte(20 + i)}, byte(i))
+		if err := p.Enqueue(ctx, tx, txidOf(t, tx)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, func() bool { return p.Stats().Accepted == 3 })
+	if got := txCalls.Load(); got != 3 {
+		t.Fatalf("individual /tx submits = %d, want 3", got)
+	}
+	if s := p.Stats(); s.Failed != 0 {
+		t.Fatalf("failed = %d, want 0 — members were salvageable", s.Failed)
+	}
 }
