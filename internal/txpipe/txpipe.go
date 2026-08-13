@@ -192,6 +192,11 @@ func New(cfg Config, log *slog.Logger) (*Pipe, error) {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	// One idle conn per in-flight batch plus retry headroom, per endpoint.
 	tr.MaxIdleConnsPerHost = cfg.Inflight + 8
+	// And a HARD cap on live connections, not just idle ones. Without it a
+	// retry storm opens a socket per rejected transaction and exhausts the
+	// host's ephemeral ports — observed as "connect: cannot assign requested
+	// address" against a cluster that was answering normally.
+	tr.MaxConnsPerHost = cfg.Inflight + 8
 	tr.IdleConnTimeout = 90 * time.Second
 
 	ins := make([]chan job, cfg.Builders)
@@ -403,14 +408,13 @@ func (p *Pipe) submit(ctx context.Context, b *batch) {
 	// transactions on one bad request — a batch-shaped fault (an oversized
 	// body, one poisonous member) does not mean the others are unacceptable.
 	if p.cfg.RetryAttempts > 0 {
-		p.log.Warn("txpipe: batch failed on all endpoints; salvaging members individually", "txs", n)
-		for _, j := range b.jobs {
-			p.wg.Add(1)
-			go func(j job) {
-				defer p.wg.Done()
-				p.retryOne(ctx, j)
-			}(j)
-		}
+		p.log.Warn("txpipe: batch failed on all endpoints; salvaging as one retry batch", "txs", n)
+		jobs := b.jobs
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			p.retryBatch(ctx, jobs)
+		}()
 		return
 	}
 	p.failed.Add(n)
@@ -470,13 +474,11 @@ func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
 		p.rejected.Add(uint64(len(toRetry)))
 		return
 	}
-	for _, j := range toRetry {
-		p.wg.Add(1)
-		go func(j job) {
-			defer p.wg.Done()
-			p.retryOne(ctx, j)
-		}(j)
-	}
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		p.retryBatch(ctx, toRetry)
+	}()
 }
 
 // subjectTxID returns the transaction an error line is ABOUT.
@@ -496,38 +498,102 @@ func (p *Pipe) subjectTxID(line string) (string, bool) {
 	return m[1], true
 }
 
-// retryOne resubmits a single transaction on the /tx endpoint with a short
-// backoff ladder. Missing-parent (422) resolves as soon as the parent's batch
-// lands, which is why retry exists at all; merit rejections stop immediately.
-func (p *Pipe) retryOne(ctx context.Context, j job) {
-	p.retried.Add(1)
+// retryBatch resubmits everything a batch left undelivered as ONE further
+// batch, under the same inflight semaphore a first submission takes.
+//
+// The shape this replaces — one goroutine and one singleton POST /tx per
+// rejected transaction, outside the semaphore — is what turned a partial
+// failure into a throughput collapse. Measured against this cluster:
+// single-transaction retries were 98.9% of propagation's requests and 97.7%
+// of its handler seconds, for a 0.074% recovery yield, and being unbounded
+// they also exhausted the shim's ephemeral ports. Retrying as a batch keeps
+// request count proportional to BATCHES rather than to transactions, and the
+// semaphore bounds what the cluster is asked to hold either way.
+//
+// Batching a retry is safe against the /txs parent-child contract: this set is
+// a subset of one batch that was already dependency-sealed, so it cannot hold
+// a parent and its child. Missing-parent (422) resolves when the PARENT's
+// batch lands — a different request — which is why waiting and resubmitting
+// works at all, and why it never needed to be one request per transaction.
+func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
+	if len(jobs) == 0 {
+		return
+	}
+	p.retried.Add(uint64(len(jobs)))
 	delays := []time.Duration{25 * time.Millisecond, 100 * time.Millisecond, 400 * time.Millisecond}
-	for attempt := 0; attempt < p.cfg.RetryAttempts; attempt++ {
-		d := delays[min(attempt, len(delays)-1)]
+	pending := jobs
+
+	for attempt := 0; attempt < p.cfg.RetryAttempts && len(pending) > 0; attempt++ {
 		select {
-		case <-time.After(d):
+		case <-time.After(delays[min(attempt, len(delays)-1)]):
 		case <-ctx.Done():
-			p.failed.Add(1)
+			p.failed.Add(uint64(len(pending)))
+			return
+		}
+
+		var body bytes.Buffer
+		for _, j := range pending {
+			body.Write(j.raw)
+		}
+
+		select {
+		case p.sem <- struct{}{}:
+		case <-ctx.Done():
+			p.failed.Add(uint64(len(pending)))
 			return
 		}
 		ep := p.cfg.Endpoints[int(p.next.Add(1)-1)%len(p.cfg.Endpoints)]
-		status, _, err := p.post(ctx, ep+"/tx", j.raw)
+		status, respBody, err := p.post(ctx, ep+"/txs", body.Bytes())
+		<-p.sem
+
 		switch {
 		case err != nil:
-			continue
-		case status == http.StatusOK, status == http.StatusConflict:
-			p.retryAccepted.Add(1)
-			p.accepted.Add(1)
+			continue // transport fault; the ladder tries the other endpoint
+
+		case status == http.StatusOK:
+			p.retryAccepted.Add(uint64(len(pending)))
+			p.accepted.Add(uint64(len(pending)))
 			return
+
+		case status == http.StatusInternalServerError &&
+			strings.HasPrefix(respBody, "Failed to process transactions"):
+			// Only the transactions the body still NAMES are outstanding; the
+			// rest of the retry batch landed and must be booked as recovered.
+			named := make(map[string]struct{})
+			for _, line := range strings.Split(respBody, "\n") {
+				if id, ok := p.subjectTxID(line); ok {
+					named[id] = struct{}{}
+				}
+			}
+			next := pending[:0:0]
+			for _, j := range pending {
+				if _, bad := named[j.id.Display()]; bad {
+					next = append(next, j)
+				}
+			}
+			if ok := len(pending) - len(next); ok > 0 {
+				p.retryAccepted.Add(uint64(ok))
+				p.accepted.Add(uint64(ok))
+			}
+			pending = next
+
+		case status == http.StatusTooManyRequests:
+			p.rateLimited.Add(1)
+			continue // the ladder's own wait is the backoff
+
 		case status == http.StatusUnprocessableEntity:
-			continue // parent still in flight; wait longer
+			continue // every member still waiting on a parent
+
 		default:
-			p.rejected.Add(1)
+			p.rejected.Add(uint64(len(pending)))
 			return
 		}
 	}
-	p.rejected.Add(1)
-	p.log.Warn("txpipe: retries exhausted", "txid", j.id.Display())
+
+	if len(pending) > 0 {
+		p.rejected.Add(uint64(len(pending)))
+		p.log.Warn("txpipe: retries exhausted", "txs", len(pending))
+	}
 }
 
 func (p *Pipe) post(ctx context.Context, url string, body []byte) (int, string, error) {

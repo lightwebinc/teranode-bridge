@@ -145,8 +145,13 @@ func TestDependencySealing(t *testing.T) {
 }
 
 // TestPartialFailureRetry pins the 500-body re-attribution path: the failed
-// txid named in the error line is retried on /tx and eventually accepted,
-// while the rest of the batch counts accepted immediately.
+// txid named in the error line is retried as its own /txs BATCH and eventually
+// accepted, while the rest of the original batch counts accepted immediately.
+//
+// The mock rejects the named transaction once and accepts it afterwards, which
+// is what really happens — a missing parent lands in a different request while
+// the retry ladder waits. It also asserts the singleton /tx endpoint is never
+// touched: retry cost must scale with batches, not with transactions.
 func TestPartialFailureRetry(t *testing.T) {
 	var mu sync.Mutex
 	var txsCalls, txCalls int
@@ -167,7 +172,11 @@ func TestPartialFailureRetry(t *testing.T) {
 				present = true
 			}
 		}
-		if !present {
+		mu.Lock()
+		first := txsCalls == 1
+		mu.Unlock()
+		if !present || !first {
+			// Second time around the parent has landed, so it is accepted.
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("OK"))
 			return
@@ -187,7 +196,10 @@ func TestPartialFailureRetry(t *testing.T) {
 
 	p, err := New(Config{
 		Endpoints: []string{srv.URL},
-		BatchTxs:  10, Linger: 5 * time.Millisecond, Inflight: 1, RetryAttempts: 3,
+		// Builders: 1 so both transactions land in ONE batch; the default
+		// sharding would route them to different builders and the count of
+		// /txs requests would stop meaning what this test asserts.
+		BatchTxs: 10, Linger: 5 * time.Millisecond, Inflight: 1, Builders: 1, RetryAttempts: 3,
 	}, testLogger())
 	if err != nil {
 		t.Fatal(err)
@@ -222,8 +234,11 @@ func TestPartialFailureRetry(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if txCalls != 1 {
-		t.Fatalf("retry /tx calls = %d, want 1", txCalls)
+	if txCalls != 0 {
+		t.Fatalf("singleton /tx calls = %d, want 0 — a retry is a batch", txCalls)
+	}
+	if txsCalls != 2 {
+		t.Fatalf("/txs requests = %d, want 2 (the batch, then one retry batch)", txsCalls)
 	}
 }
 
@@ -294,14 +309,24 @@ func TestUnattributedErrorLine(t *testing.T) {
 }
 
 // TestWholeBatchFailureSalvages pins the salvage path: when every endpoint
-// refuses the whole batch, the members are individually retried rather than
-// written off — a batch-shaped fault does not make its members unacceptable.
+// refuses the whole batch, the members are retried as ONE further batch rather
+// than written off — a batch-shaped fault does not make its members
+// unacceptable — and the singleton /tx endpoint is never used, because a
+// per-member fan-out is what collapses a real cluster.
 func TestWholeBatchFailureSalvages(t *testing.T) {
 	var txCalls atomic.Int64
 	mux := http.NewServeMux()
+	var txsCalls atomic.Int64
 	mux.HandleFunc("/txs", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
-		http.Error(w, "Invalid request body: too much data", http.StatusBadRequest)
+		// The first submission (and its one failover attempt) is refused
+		// batch-shaped; the salvage batch that follows is accepted.
+		if txsCalls.Add(1) <= 2 {
+			http.Error(w, "Invalid request body: too much data", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
 	})
 	mux.HandleFunc("/tx", func(w http.ResponseWriter, _ *http.Request) {
 		txCalls.Add(1)
@@ -329,8 +354,11 @@ func TestWholeBatchFailureSalvages(t *testing.T) {
 		}
 	}
 	waitFor(t, func() bool { return p.Stats().Accepted == 3 })
-	if got := txCalls.Load(); got != 3 {
-		t.Fatalf("individual /tx submits = %d, want 3", got)
+	if got := txCalls.Load(); got != 0 {
+		t.Fatalf("singleton /tx submits = %d, want 0 — salvage must be one batch", got)
+	}
+	if got := txsCalls.Load(); got != 3 {
+		t.Fatalf("/txs requests = %d, want 3 (submit + failover + one salvage batch)", got)
 	}
 	if s := p.Stats(); s.Failed != 0 {
 		t.Fatalf("failed = %d, want 0 — members were salvageable", s.Failed)
