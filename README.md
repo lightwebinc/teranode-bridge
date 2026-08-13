@@ -150,8 +150,8 @@ set — the bridge is configured entirely by flags, so pass them as the containe
 command or Helm `args`.
 
 ```bash
-docker build --build-arg VERSION=0.1.0 -t teranode-bridge:0.1.0 .
-docker run --rm teranode-bridge:0.1.0 -mode sink
+docker build --build-arg VERSION=0.3.0 -t teranode-bridge:0.3.0 .
+docker run --rm teranode-bridge:0.3.0 -mode sink
 ```
 
 Published images are gated behind a manual `image-publish` workflow run

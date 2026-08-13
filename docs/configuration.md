@@ -399,7 +399,7 @@ they go in the container command (or a chart's `args`).
 ```bash
 docker run --rm \
   -p 8833:8833 -p 9143:9143 -p 9144:9144 -p 9145:9145 \
-  ghcr.io/lightwebinc/teranode-bridge:0.1.0 \
+  ghcr.io/lightwebinc/teranode-bridge:0.3.0 \
     -advertise   'http://[2001:db8:3f::1]:9145' \
     -propagation 'http://192.0.2.10:20833' \
     -kafka       '192.0.2.10:19092'
