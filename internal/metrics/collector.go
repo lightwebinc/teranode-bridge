@@ -71,6 +71,8 @@ var (
 		"Pulls answered 404 because the object (or a subtree member) was not held. The cluster falls back to its ordinary peer-pull path.", nil, nil)
 	retrievalErrors = prometheus.NewDesc("btb_retrieval_errors_total",
 		"Pulls answered 5xx on a genuine bridge-side fault.", nil, nil)
+	retrievalUnserved = prometheus.NewDesc("btb_retrieval_unserved_route_total",
+		"Requests for routes the bridge does not serve at all, by class. class=\"chain_sync\" is the canary for the catchup-divert: the cluster selected the bridge as a chain-sync source. Rare bursts accompany multi-peer degradation (the cached-alternatives walk skips the divert gate); a SUSTAINED rate means the synthetic peer-id no longer diverts catchup — the id was registered or gate semantics changed on upgrade — and must alarm before the next node falls behind.", []string{"class"}, nil)
 
 	reversePublished = prometheus.NewDesc("btb_reverse_published_total",
 		"Objects this cluster produced that were published back onto the object plane, by class.", []string{"class"}, nil)
@@ -115,7 +117,7 @@ func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 		registryEntries, registryDups, submitTotal, announceTotal, announceFailures,
 		pipeBatches, pipeSeals, pipeRetried, pipeRetryOK,
 		pipeUnattributed, pipeRateLimited, pipeQueue,
-		retrievalServed, retrievalMisses, retrievalErrors,
+		retrievalServed, retrievalMisses, retrievalErrors, retrievalUnserved,
 		reversePublished, reverseSkipped, reverseFailures, reverseReconnects,
 		upObjects, upBytes, upFailures, upRedials,
 	} {
@@ -189,6 +191,8 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(retrievalServed, float64(s.Block), "block")
 		counter(retrievalMisses, float64(s.Miss))
 		counter(retrievalErrors, float64(s.Errors))
+		counter(retrievalUnserved, float64(s.UnservedChainSync), "chain_sync")
+		counter(retrievalUnserved, float64(s.UnservedRoute-s.UnservedChainSync), "other")
 	}
 
 	if src.Reverse != nil {

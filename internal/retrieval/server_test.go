@@ -214,3 +214,35 @@ func TestBaseURL(t *testing.T) {
 		t.Fatalf("BaseURL = %q", got)
 	}
 }
+
+// TestNotFoundClassifiesChainSyncRoutes pins the canary: a chain-sync route
+// request must count under UnservedChainSync — it is the signal that the
+// cluster selected the bridge as a catchup source, which the synthetic
+// peer-id divert exists to prevent.
+func TestNotFoundClassifiesChainSyncRoutes(t *testing.T) {
+	s, _, _, srv := testServer(t)
+	defer srv.Close()
+	h := s.Handler()
+
+	for _, path := range []string{
+		"/api/v1/headers_from_common_ancestor/0000000000000000000000000000000000000000000000000000000000000000?n=1000",
+		"/api/v1/blocks?n=100",
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s: status = %d, want 404 — a chain route must fail loudly, not pretend", path, rec.Code)
+		}
+	}
+	st := s.Stats()
+	if st.UnservedChainSync != 2 {
+		t.Fatalf("UnservedChainSync = %d, want 2", st.UnservedChainSync)
+	}
+
+	// An unknown non-chain route counts as unserved but NOT as chain_sync.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/frobnicate", nil))
+	if st := s.Stats(); st.UnservedChainSync != 2 || st.UnservedRoute != 3 {
+		t.Fatalf("after non-chain route: chain=%d route=%d, want 2/3", st.UnservedChainSync, st.UnservedRoute)
+	}
+}

@@ -70,7 +70,7 @@ mis-advertised listener passes the ping and then fails at produce time.
 | --- | --- | --- |
 | `-subtree-topic` | `subtrees-teranode1` | Kafka topic the cluster's subtree validation consumes. |
 | `-block-topic` | `blocks-teranode1` | Kafka topic the cluster's block validation consumes. |
-| `-peer-id` | `""` | Peer identity stamped on announcements. **Leave empty.** |
+| `-peer-id` | `""` | Peer identity stamped on announcements. **Set a synthetic id** (see below); empty is unsafe. |
 
 Both topic names must match the cluster's own configuration; the defaults match
 Teranode's single-node defaults. An announcement produced to a topic nobody
@@ -78,12 +78,37 @@ consumes is silently ineffective — the object is never pulled, never validated
 and only shows up as a growing gap between `announce stats` and
 `retrieval stats`.
 
-> **`-peer-id` should stay empty.** It is a libp2p peer identity used for
-> reputation bookkeeping, and an empty value short-circuits every such check. An
-> identity the cluster's p2p service does not recognise is not merely cosmetic:
-> on the block path an unrecognised or flagged peer causes catchup to be skipped
-> and fetches to be **refused**. The bridge is not a libp2p peer, so it claims no
-> identity.
+> **`-peer-id` must be a SYNTHETIC libp2p id** — a valid-format `12D3KooW…`
+> identity derived from a fresh ed25519 key and registered with no p2p service.
+> This inverts earlier guidance, which said to leave it empty; that guidance was
+> wrong at teranode `1cca625` and caused a verified production-shaped wedge.
+>
+> Why a synthetic id works (both halves verified in the upstream source and by
+> lab drills): the cluster's **catchup** gate treats an *unregistered* id as
+> unhealthy and diverts chain sync to real libp2p peers, while every
+> **delivery** gate checks only bans and keeps pulling objects from the bridge.
+> The bridge therefore augments the p2p network without ever being asked for
+> the chain itself.
+>
+> Why empty is unsafe: catchup substitutes the announce **URL** for a missing
+> id, so the cluster targets the bridge's retrieval plane for
+> `/headers_from_common_ancestor`, gets 404s, opens a circuit breaker on that
+> URL, and locks itself out of recovery. Observed live: a node wedged 300+
+> blocks behind with a healthy peer one hop away.
+>
+> Derivation (any fresh ed25519 key; never reuse a real peer's id):
+> ed25519 public key → protobuf `08 01 12 20 ‖ pub` → identity multihash
+> `00 24 ‖ …` → base58btc. Give every bridge instance its own id.
+>
+> The invariant is monitored, not assumed:
+> `btb_retrieval_unserved_route_total{class="chain_sync"}` counts the cluster
+> asking the bridge for chain-sync routes. Rare bursts accompany multi-peer
+> degradation (upstream's cached-alternatives walk skips the divert gate); a
+> sustained rate means the divert has regressed — alarm on it.
+>
+> Boundary worth knowing: the bridge is an **object source, never a sync
+> source**. A cluster that falls further behind than its announce backlog can
+> only recover through a real libp2p peer; deployments need at least one.
 
 ## Reverse path (cluster → object plane)
 

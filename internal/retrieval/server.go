@@ -68,6 +68,7 @@ type Server struct {
 
 	hitSubtree, hitSubtreeData, hitTxs, hitBlock atomic.Uint64
 	miss, errs                                   atomic.Uint64
+	missRoute, missChainSync                     atomic.Uint64
 }
 
 // New builds the server. subtrees/blocks/txs may be the same cache instance.
@@ -277,7 +278,27 @@ func (s *Server) getBlock(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
-	s.log.Debug("unhandled pull", "method", r.Method, "path", r.URL.Path)
+	// Classify what the cluster asked for. A chain-sync route here is the
+	// single strongest signal the deployment can produce: it means the
+	// cluster selected the BRIDGE as a catchup source. Rare bursts are the
+	// known cached-alternatives path during multi-peer degradation; a
+	// SUSTAINED rate means the synthetic peer-id divert has stopped working
+	// (id registered, gate semantics changed on upgrade) and the next
+	// node to fall behind may wedge. Alert on it; do not ignore it.
+	class := "other"
+	switch {
+	case strings.Contains(r.URL.Path, "/headers_from_common_ancestor") ||
+		strings.Contains(r.URL.Path, "/block_locator") ||
+		strings.Contains(r.URL.Path, "/blocks"):
+		class = "chain_sync"
+		s.missChainSync.Add(1)
+		s.log.Warn("cluster asked the bridge for a chain-sync route; the bridge is an object source, not a sync peer",
+			"method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
+	case strings.Contains(r.URL.Path, "/tx"):
+		class = "tx"
+	}
+	s.missRoute.Add(1)
+	s.log.Debug("unhandled pull", "method", r.Method, "path", r.URL.Path, "class", class)
 	http.Error(w, "not served by this bridge", http.StatusNotFound)
 }
 
@@ -321,16 +342,23 @@ func isPlaceholder(b []byte) bool {
 // Stats is a snapshot for logging and metrics.
 type Stats struct {
 	Subtree, SubtreeData, Txs, Block, Miss, Errors uint64
+	// UnservedRoute counts requests for routes the bridge does not serve at
+	// all (vs Miss, which counts known routes for objects it lacks).
+	// UnservedChainSync is the subset that asked for chain-sync routes — the
+	// canary for the catchup-divert regressing.
+	UnservedRoute, UnservedChainSync uint64
 }
 
 // Stats returns a snapshot of the retrieval plane's hit, miss and error counts.
 func (s *Server) Stats() Stats {
 	return Stats{
-		Subtree:     s.hitSubtree.Load(),
-		SubtreeData: s.hitSubtreeData.Load(),
-		Txs:         s.hitTxs.Load(),
-		Block:       s.hitBlock.Load(),
-		Miss:        s.miss.Load(),
-		Errors:      s.errs.Load(),
+		Subtree:           s.hitSubtree.Load(),
+		SubtreeData:       s.hitSubtreeData.Load(),
+		Txs:               s.hitTxs.Load(),
+		Block:             s.hitBlock.Load(),
+		Miss:              s.miss.Load(),
+		Errors:            s.errs.Load(),
+		UnservedRoute:     s.missRoute.Load(),
+		UnservedChainSync: s.missChainSync.Load(),
 	}
 }

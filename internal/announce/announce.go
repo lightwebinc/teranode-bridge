@@ -94,13 +94,18 @@ type Config struct {
 	SubtreeTopic string
 	BlockTopic   string
 
-	// PeerID should normally be EMPTY. The field is a libp2p peer identity used
-	// for reputation bookkeeping, and an empty value short-circuits every such
-	// check. A non-empty identity the cluster's p2p service does not know is not
-	// merely cosmetic: on the block path an unrecognised or flagged peer causes
-	// catchup to be skipped and fetches to be refused. We are not a libp2p peer,
-	// so we claim no identity.
-	PeerID string
+	// PeerID must be a SYNTHETIC libp2p peer id: a valid-format (12D3KooW…)
+	// identity derived from a fresh key and registered with no p2p service.
+	// The cluster's catchup gate treats an unregistered id as unhealthy and
+	// diverts chain sync to real libp2p peers, while the delivery gates only
+	// check bans and keep pulling objects from the bridge — so the bridge
+	// augments the network without ever becoming a sync source. EMPTY IS
+	// UNSAFE: catchup substitutes the announce URL for a missing id, targets
+	// the bridge's retrieval plane for the header chain, 404s, and
+	// circuit-breaks the cluster out of recovery. (Semantics verified at
+	// teranode 1cca625; btb_retrieval_unserved_route_total{class="chain_sync"}
+	// is the canary that the divert still holds.)
+PeerID string
 
 	Timeout time.Duration // per-produce deadline
 }
