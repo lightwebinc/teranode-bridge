@@ -105,7 +105,7 @@ type Config struct {
 	// circuit-breaks the cluster out of recovery. (Semantics verified at
 	// teranode 1cca625; btb_retrieval_unserved_route_total{class="chain_sync"}
 	// is the canary that the divert still holds.)
-PeerID string
+	PeerID string
 
 	Timeout time.Duration // per-produce deadline
 }
