@@ -1,8 +1,8 @@
 # Configuration
 
 `teranode-bridge` is configured entirely by **command-line flags**. There are no
-environment-variable fallbacks and no configuration file: the process is meant to
-be driven by a unit file, a container command, or a chart's `args`.
+environment-variable fallbacks and no configuration file: the process is meant
+to be driven by a unit file, a container command, or a chart's `args`.
 
 ```bash
 teranode-bridge -help
@@ -19,12 +19,12 @@ One TCP listener per object class. The streams are bare — no length prefix, no
 type tag — so each lane carries exactly one class and objects are delimited by
 their own structure.
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `-tx-listen` | `[::]:8833` | Transaction lane (BRC-30 extended format — the cluster requires EF; a transaction without prevout data is refused on its merits and counts as `rejected`). |
-| `-subtree-listen` | `[::]:9143` | Subtree lane (BRC-143 push frames). |
-| `-block-listen` | `[::]:9144` | Block lane (BRC-144 push frames). |
-| `-max-object` | `0` | Per-object size ceiling in bytes. `0` uses the `objfmt` codec default of 64 MiB. Applies to every lane. |
+| Flag              | Default     | Description                                                                                                                                                |
+| ----------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-tx-listen`      | `[::]:8833` | Transaction lane (BRC-30 extended format — the cluster requires EF; a transaction without prevout data is refused on its merits and counts as `rejected`). |
+| `-subtree-listen` | `[::]:9143` | Subtree lane (BRC-143 push frames).                                                                                                                        |
+| `-block-listen`   | `[::]:9144` | Block lane (BRC-144 push frames).                                                                                                                          |
+| `-max-object`     | `0`         | Per-object size ceiling in bytes. `0` uses the `objfmt` codec default of 64 MiB. Applies to every lane.                                                    |
 
 Bind these to the interface the delivery side reaches the bridge on — typically
 the link-facing address, not `[::]`, once the deployment is settled.
@@ -33,44 +33,44 @@ the link-facing address, not `[::]`, once the deployment is settled.
 
 Answers the pulls the cluster makes after an announcement.
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `-retrieval-listen` | `[::]:9145` | Bind address for the retrieval HTTP server. Must be reachable from the cluster's subtree- and block-validation services. |
-| `-advertise` | — | **Required unless `-mode sink`.** The base URL the cluster should dial for pulls, e.g. `http://[2001:db8:3f::1]:9145`. This value, plus `-api-prefix`, is what is stamped into every announcement. |
-| `-api-prefix` | `/api/v1` | Path prefix the retrieval plane serves on. Must match what the cluster expects: it concatenates the announced base URL with `/subtree/{hash}` verbatim, and its own asset service mounts everything under `/api/v1`. |
+| Flag                | Default     | Description                                                                                                                                                                                                          |
+| ------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-retrieval-listen` | `[::]:9145` | Bind address for the retrieval HTTP server. Must be reachable from the cluster's subtree- and block-validation services.                                                                                             |
+| `-advertise`        | —           | **Required unless `-mode sink`.** The base URL the cluster should dial for pulls, e.g. `http://[2001:db8:3f::1]:9145`. This value, plus `-api-prefix`, is what is stamped into every announcement.                   |
+| `-api-prefix`       | `/api/v1`   | Path prefix the retrieval plane serves on. Must match what the cluster expects: it concatenates the announced base URL with `/subtree/{hash}` verbatim, and its own asset service mounts everything under `/api/v1`. |
 
 The announced URL is `strings.TrimRight(advertise, "/") + apiPrefix`. Do **not**
 put the prefix in `-advertise` as well — the result would be a doubled path.
 
-`-advertise` must be an address the *cluster* can dial, which is not necessarily
+`-advertise` must be an address the _cluster_ can dial, which is not necessarily
 the address the bridge binds. Binding `[::]:9145` while advertising a specific
 routable address is the normal arrangement.
 
 ## Cluster ingest targets
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `-propagation` | — | **Required unless `-mode sink`.** Propagation HTTP base URL(s), e.g. `http://192.0.2.10:20833`. Repeatable and/or comma-separated; multiple endpoints are round-robined per transaction. |
-| `-kafka` | — | **Required unless `-mode sink`.** Cluster Kafka broker(s), e.g. `192.0.2.10:19092`. Repeatable and/or comma-separated. |
+| Flag           | Default | Description                                                                                                                                                                              |
+| -------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-propagation` | —       | **Required unless `-mode sink`.** Propagation HTTP base URL(s), e.g. `http://192.0.2.10:20833`. Repeatable and/or comma-separated; multiple endpoints are round-robined per transaction. |
+| `-kafka`       | —       | **Required unless `-mode sink`.** Cluster Kafka broker(s), e.g. `192.0.2.10:19092`. Repeatable and/or comma-separated.                                                                   |
 
-Both flags accumulate: `-propagation a,b` and `-propagation a -propagation b` are
-equivalent.
+Both flags accumulate: `-propagation a,b` and `-propagation a -propagation b`
+are equivalent.
 
 At startup the bridge probes `GET {propagation}/health` and pings the Kafka
 brokers. **Neither failure is fatal** — the cluster may still be starting — but
 both are logged at warn level, and a persistent failure shows up as `failed`
 submits or `announce failures` in the stats.
 
-The Kafka brokers must advertise a listener that resolves *from the bridge*. A
+The Kafka brokers must advertise a listener that resolves _from the bridge_. A
 mis-advertised listener passes the ping and then fails at produce time.
 
 ## Announcements
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `-subtree-topic` | `subtrees-teranode1` | Kafka topic the cluster's subtree validation consumes. |
-| `-block-topic` | `blocks-teranode1` | Kafka topic the cluster's block validation consumes. |
-| `-peer-id` | `""` | Peer identity stamped on announcements. **Set a synthetic id** (see below); empty is unsafe. |
+| Flag             | Default              | Description                                                                                  |
+| ---------------- | -------------------- | -------------------------------------------------------------------------------------------- |
+| `-subtree-topic` | `subtrees-teranode1` | Kafka topic the cluster's subtree validation consumes.                                       |
+| `-block-topic`   | `blocks-teranode1`   | Kafka topic the cluster's block validation consumes.                                         |
+| `-peer-id`       | `""`                 | Peer identity stamped on announcements. **Set a synthetic id** (see below); empty is unsafe. |
 
 Both topic names must match the cluster's own configuration; the defaults match
 Teranode's single-node defaults. An announcement produced to a topic nobody
@@ -84,11 +84,11 @@ and only shows up as a growing gap between `announce stats` and
 > wrong at teranode `1cca625` and caused a verified production-shaped wedge.
 >
 > Why a synthetic id works (both halves verified in the upstream source and by
-> lab drills): the cluster's **catchup** gate treats an *unregistered* id as
+> lab drills): the cluster's **catchup** gate treats an _unregistered_ id as
 > unhealthy and diverts chain sync to real libp2p peers, while every
 > **delivery** gate checks only bans and keeps pulling objects from the bridge.
-> The bridge therefore augments the p2p network without ever being asked for
-> the chain itself.
+> The bridge therefore augments the p2p network without ever being asked for the
+> chain itself.
 >
 > Why empty is unsafe: catchup substitutes the announce **URL** for a missing
 > id, so the cluster targets the bridge's retrieval plane for
@@ -96,9 +96,9 @@ and only shows up as a growing gap between `announce stats` and
 > URL, and locks itself out of recovery. Observed live: a node wedged 300+
 > blocks behind with a healthy peer one hop away.
 >
-> Derivation (any fresh ed25519 key; never reuse a real peer's id):
-> ed25519 public key → protobuf `08 01 12 20 ‖ pub` → identity multihash
-> `00 24 ‖ …` → base58btc. Give every bridge instance its own id.
+> Derivation (any fresh ed25519 key; never reuse a real peer's id): ed25519
+> public key → protobuf `08 01 12 20 ‖ pub` → identity multihash `00 24 ‖ …` →
+> base58btc. Give every bridge instance its own id.
 >
 > The invariant is monitored, not assumed:
 > `btb_retrieval_unserved_route_total{class="chain_sync"}` counts the cluster
@@ -114,14 +114,14 @@ and only shows up as a growing gap between `announce stats` and
 
 Disabled unless `-blockchain` is set. Ignored entirely in `-mode sink`.
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `-blockchain` | — | Cluster blockchain gRPC `host:port`, e.g. `192.0.2.10:20087`. Setting it enables the reverse path and **requires** `-local-asset` and `-edge-ingress`. |
-| `-local-asset` | — | Cluster asset base URL **including the API prefix**, e.g. `http://192.0.2.10:20090/api/v1`. Used to fetch objects the cluster produced. |
-| `-edge-ingress` | — | Host of the object-plane ingress for upward submits, e.g. `2001:db8:1::1`. Typically reachable only over the delivery link. |
-| `-edge-subtree-port` | `8726` | Ingress port for BRC-143 subtree submits. |
-| `-edge-block-port` | `8727` | Ingress port for BRC-144 block submits. |
-| `-submitter` | `true` | Hold the submitter role on this bridge. Exactly one bridge per cluster should hold it for a given class. |
+| Flag                 | Default | Description                                                                                                                                            |
+| -------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `-blockchain`        | —       | Cluster blockchain gRPC `host:port`, e.g. `192.0.2.10:20087`. Setting it enables the reverse path and **requires** `-local-asset` and `-edge-ingress`. |
+| `-local-asset`       | —       | Cluster asset base URL **including the API prefix**, e.g. `http://192.0.2.10:20090/api/v1`. Used to fetch objects the cluster produced.                |
+| `-edge-ingress`      | —       | Host of the object-plane ingress for upward submits, e.g. `2001:db8:1::1`. Typically reachable only over the delivery link.                            |
+| `-edge-subtree-port` | `8726`  | Ingress port for BRC-143 subtree submits.                                                                                                              |
+| `-edge-block-port`   | `8727`  | Ingress port for BRC-144 block submits.                                                                                                                |
+| `-submitter`         | `true`  | Hold the submitter role on this bridge. Exactly one bridge per cluster should hold it for a given class.                                               |
 
 The gRPC connection to the blockchain service is **plaintext and
 unauthenticated**. Keep it on a trusted LAN.
@@ -133,49 +133,49 @@ standby bridge a hot spare.
 
 ### Health-gated failover (`-submitter-probe`)
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `-submitter-probe` | `""` | The PRIMARY bridge's `/readyz` URL. Set on a **standby** (`-submitter=false`); ignored with a warning on a configured primary. |
+| Flag               | Default | Description                                                                                                                    |
+| ------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `-submitter-probe` | `""`    | The PRIMARY bridge's `/readyz` URL. Set on a **standby** (`-submitter=false`); ignored with a warning on a configured primary. |
 
 The standby probes the primary every 2 s. Five consecutive failures **promote**
-it (it starts publishing, `btb_submitter_active` flips to 1, log line `PROMOTED
-to submitter`); ten consecutive successes demote it again. Demotion is
+it (it starts publishing, `btb_submitter_active` flips to 1, log line
+`PROMOTED to submitter`); ten consecutive successes demote it again. Demotion is
 deliberately slower than promotion so a flapping primary cannot flap the role,
-and the failure envelope is benign in both directions: a dead primary costs
-~10 s of publish gap (the failure model's existing "gap until promoted", now
-seconds instead of a pager), and a false promotion costs a window of
-dual-publish that every receiver's hash dedup absorbs. The standby's
-subscription, seen-registry and origin filter run the whole time, so promotion
-is a flag flip, not a cold start.
+and the failure envelope is benign in both directions: a dead primary costs ~10
+s of publish gap (the failure model's existing "gap until promoted", now seconds
+instead of a pager), and a false promotion costs a window of dual-publish that
+every receiver's hash dedup absorbs. The standby's subscription, seen-registry
+and origin filter run the whole time, so promotion is a flag flip, not a cold
+start.
 
 ## Transaction pipeline
 
 The tx lane never submits synchronously: objects are enqueued to a batching
 pipeline that ships them on propagation's `POST /txs` endpoint (effective caps:
-1023 txs / 32 MiB per request). The lane read loop's only costs are parse,
-hash, one copy, and an enqueue — measured at >1.4M tx/s sustained on a 2×18-core
-host against a mock sink, with backpressure (a full queue blocks the lane, which
+1023 txs / 32 MiB per request). The lane read loop's only costs are parse, hash,
+one copy, and an enqueue — measured at >1.4M tx/s sustained on a 2×18-core host
+against a mock sink, with backpressure (a full queue blocks the lane, which
 closes the TCP window) bounding memory when the cluster is slower than the
 fabric.
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `-tx-batch` | `512` | Transactions per batch (clamped to 1023 — see note). |
-| `-tx-batch-bytes` | `8388608` | Batch body ceiling (capped under the server's 32 MiB). |
-| `-tx-linger` | `2ms` | Max age of a non-full batch — bounds added latency when quiet. |
-| `-tx-inflight` | `4` | Concurrent batch requests. Throughput ≈ inflight × batch / RTT. |
-| `-tx-builders` | `4` | Parallel batch builders (power of two, ≤16); txs route to builders by txid. |
-| `-tx-retries` | `3` | Per-tx retries for failures that resolve with time (missing parent). `0` disables. |
+| Flag              | Default   | Description                                                                        |
+| ----------------- | --------- | ---------------------------------------------------------------------------------- |
+| `-tx-batch`       | `512`     | Transactions per batch (clamped to 1023 — see note).                               |
+| `-tx-batch-bytes` | `8388608` | Batch body ceiling (capped under the server's 32 MiB).                             |
+| `-tx-linger`      | `2ms`     | Max age of a non-full batch — bounds added latency when quiet.                     |
+| `-tx-inflight`    | `4`       | Concurrent batch requests. Throughput ≈ inflight × batch / RTT.                    |
+| `-tx-builders`    | `4`       | Parallel batch builders (power of two, ≤16); txs route to builders by txid.        |
+| `-tx-retries`     | `3`       | Per-tx retries for failures that resolve with time (missing parent). `0` disables. |
 
 Three contract details worth knowing:
 
 - **The batch cap is 1023, not 1024**: propagation checks
-  `totalNrTransactions >= maxTransactionsPerRequest` at the *top* of its read
+  `totalNrTransactions >= maxTransactionsPerRequest` at the _top_ of its read
   loop, so a request holding exactly 1024 transactions is read, dispatched and
   fully processed — and only then answered `400`. Batching at the advertised
-  limit therefore delivers every member *and* reports the batch as failed,
-  which would resubmit all 1024 as duplicates. `-tx-batch` is clamped to 1023
-  for that reason; raising it above that has no effect.
+  limit therefore delivers every member _and_ reports the batch as failed, which
+  would resubmit all 1024 as duplicates. `-tx-batch` is clamped to 1023 for that
+  reason; raising it above that has no effect.
 - **Parent/child**: propagation processes a batch concurrently, and its handler
   documents that a request must not contain both a parent and its child. The
   pipe walks each transaction's input outpoints and **seals** the open batch
@@ -185,7 +185,7 @@ Three contract details worth knowing:
 - **Partial failure**: a batch answering `500 Failed to process transactions`
   had its other members processed; the failed txids are parsed from the error
   lines and retried individually. Attribution reads only the txid the error
-  convention *brackets* — messages such as `duplicate input found: <hash>:<n>`
+  convention _brackets_ — messages such as `duplicate input found: <hash>:<n>`
   quote a second hash that is not the subject, and counting it would book a
   phantom failure against a batch member that in fact succeeded. Any error line
   naming no member of the batch it answers is counted in
@@ -193,7 +193,7 @@ Three contract details worth knowing:
   batch's outcome is partly unknown rather than good.
 - **Rate limiting**: propagation's HTTP limiter is per source IP **and** per
   endpoint. A `429` means nothing in the batch was processed, so the pipe
-  retries the batch *whole* (never splitting it into per-member requests, which
+  retries the batch _whole_ (never splitting it into per-member requests, which
   would multiply the request rate by the batch size against the limiter that
   just refused it) and counts `btb_txpipe_rate_limited_total`. A sustained
   non-zero rate means one bridge is saturating one endpoint — add endpoints or
@@ -201,9 +201,9 @@ Three contract details worth knowing:
 
 ## Origin detection (`-mine-tag`)
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `-mine-tag` | `""` | This cluster's `coinbase_arbitrary_text` (e.g. `/teranode1/`). |
+| Flag        | Default | Description                                                    |
+| ----------- | ------- | -------------------------------------------------------------- |
+| `-mine-tag` | `""`    | This cluster's `coinbase_arbitrary_text` (e.g. `/teranode1/`). |
 
 Blockchain notifications carry no origin, and a block this cluster learned over
 libp2p **before** the fabric delivered it looks unseen — without a check, the
@@ -221,17 +221,17 @@ producer, local block assembly.
 
 ## Cache and duplicate suppression
 
-| Flag | Default | Description |
-| --- | --- | --- |
+| Flag           | Default              | Description                                                                                                                                    |
+| -------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `-cache-bytes` | `1073741824` (1 GiB) | Byte ceiling **per cache**. Two caches are created — objects (subtrees, blocks) and transactions — so the process ceiling is twice this value. |
-| `-cache-ttl` | `10m` | How long a pushed object stays fetchable. |
+| `-cache-ttl`   | `10m`                | How long a pushed object stays fetchable.                                                                                                      |
 
 Size the TTL against validation lag, not against retention: this is a cache, not
 a store of record. An entry evicted before the cluster pulls it produces a `404`
-and the cluster falls back to its ordinary peer announce-and-pull path — degraded
-latency, not lost data. Watch `cache stats evicted` and `retrieval stats miss`
-together; a rising `miss` with a flat `evicted` points at a topic or URL problem
-instead.
+and the cluster falls back to its ordinary peer announce-and-pull path —
+degraded latency, not lost data. Watch `cache stats evicted` and
+`retrieval stats miss` together; a rising `miss` with a flat `evicted` points at
+a topic or URL problem instead.
 
 The tx cache is **generational** (two map generations, rotated by TTL/2 or byte
 budget, oldest dropped wholesale): at megatransaction rates an LRU costs ~5× the
@@ -245,15 +245,15 @@ configurable.
 
 ## Process
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `-mode` | `all` | `all` = full bridge. `sink` = receive, parse, verify and count only, with no cluster targets. |
-| `-stats-every` | `1m` | Interval between stats blocks. `0` disables periodic stats (a final block is still emitted at shutdown). |
-| `-metrics-addr` | `[::]:9146` | HTTP listener for `/metrics`, `/healthz`, `/readyz`, `/loglevel`. Empty disables it. |
-| `-log-level` | `info` | `debug` \| `info` \| `warn` \| `error`. Runtime-changeable via `POST /loglevel` and `SIGHUP`. |
-| `-log-format` | `text` | `text` (stderr) or `json` (stdout — the fleet aggregation contract). |
-| `-instance-id` | hostname | `service.instance.id` shared by logs and metrics, so the two join. |
-| `-debug` | `false` | Deprecated alias for `-log-level=debug`. |
+| Flag            | Default     | Description                                                                                              |
+| --------------- | ----------- | -------------------------------------------------------------------------------------------------------- |
+| `-mode`         | `all`       | `all` = full bridge. `sink` = receive, parse, verify and count only, with no cluster targets.            |
+| `-stats-every`  | `1m`        | Interval between stats blocks. `0` disables periodic stats (a final block is still emitted at shutdown). |
+| `-metrics-addr` | `[::]:9146` | HTTP listener for `/metrics`, `/healthz`, `/readyz`, `/loglevel`. Empty disables it.                     |
+| `-log-level`    | `info`      | `debug` \| `info` \| `warn` \| `error`. Runtime-changeable via `POST /loglevel` and `SIGHUP`.            |
+| `-log-format`   | `text`      | `text` (stderr) or `json` (stdout — the fleet aggregation contract).                                     |
+| `-instance-id`  | hostname    | `service.instance.id` shared by logs and metrics, so the two join.                                       |
+| `-debug`        | `false`     | Deprecated alias for `-log-level=debug`.                                                                 |
 
 > **Why `text` is the default here** and `json` elsewhere in the stack: the
 > integration demo parses this binary's log lines with anchored regexes. Set
@@ -261,18 +261,18 @@ configurable.
 
 ### Observability endpoints
 
-| Route | Answer |
-| --- | --- |
-| `GET /metrics` | Prometheus exposition, `btb_` prefix |
-| `GET /healthz` | always `200` |
-| `GET /readyz` | `200` once every lane is bound, `503` before |
-| `POST /loglevel` | runtime log-level change |
+| Route            | Answer                                       |
+| ---------------- | -------------------------------------------- |
+| `GET /metrics`   | Prometheus exposition, `btb_` prefix         |
+| `GET /healthz`   | always `200`                                 |
+| `GET /readyz`    | `200` once every lane is bound, `503` before |
+| `POST /loglevel` | runtime log-level change                     |
 
 Metrics are read from the same counters the stats lines report, so the two never
 disagree. The one to alert on is **`btb_echo_mismatch_total`** — non-zero means
-the object plane returned different bytes than were published. Series are present
-at zero from startup, so `== 0` is a valid alert expression immediately after a
-restart.
+the object plane returned different bytes than were published. Series are
+present at zero from startup, so `== 0` is a valid alert expression immediately
+after a restart.
 
 `-mode sink` skips the propagation submitter, the Kafka producer, the retrieval
 plane and the reverse path. Lanes still run, still enforce framing, and still
@@ -281,13 +281,13 @@ or to separate object-plane faults from cluster-side ones.
 
 ## Required-flag matrix
 
-| Flag | `-mode all` | `-mode sink` |
-| --- | --- | --- |
-| `-propagation` | required | ignored |
-| `-kafka` | required | ignored |
-| `-advertise` | required | ignored |
-| `-blockchain` | optional (enables reverse path) | ignored |
-| `-local-asset`, `-edge-ingress` | required **if** `-blockchain` is set | ignored |
+| Flag                            | `-mode all`                          | `-mode sink` |
+| ------------------------------- | ------------------------------------ | ------------ |
+| `-propagation`                  | required                             | ignored      |
+| `-kafka`                        | required                             | ignored      |
+| `-advertise`                    | required                             | ignored      |
+| `-blockchain`                   | optional (enables reverse path)      | ignored      |
+| `-local-asset`, `-edge-ingress` | required **if** `-blockchain` is set | ignored      |
 
 Missing a required flag exits `2` before any listener opens. A construction
 failure (bad propagation config, unreachable Kafka client setup, bad blockchain
@@ -298,12 +298,12 @@ address) exits `1`.
 The bridge needs four things reachable on the cluster's LAN. Default ports for a
 standard Teranode deployment:
 
-| Service | Default | Used for |
-| --- | --- | --- |
-| Propagation HTTP | `:20833` | `POST /tx`, `GET /health` |
-| Kafka (external listener) | `:19092` | subtree and block announcements |
-| Asset HTTP | `:20090` (under `/api/v1`) | reverse path fetches |
-| Blockchain gRPC | `:20087` | reverse path `Subscribe` |
+| Service                   | Default                    | Used for                        |
+| ------------------------- | -------------------------- | ------------------------------- |
+| Propagation HTTP          | `:20833`                   | `POST /tx`, `GET /health`       |
+| Kafka (external listener) | `:19092`                   | subtree and block announcements |
+| Asset HTTP                | `:20090` (under `/api/v1`) | reverse path fetches            |
+| Blockchain gRPC           | `:20087`                   | reverse path `Subscribe`        |
 
 And the cluster must be able to reach the bridge's `-advertise` URL. Nothing on
 the cluster is modified: no patched ingest, no new RPC, no changed validation.
@@ -413,8 +413,8 @@ WantedBy=multi-user.target
 ```
 
 `DynamicUser` is fine: the bridge writes nothing to disk and binds only
-unprivileged ports by default. Give it `AmbientCapabilities=CAP_NET_BIND_SERVICE`
-only if you move a lane below 1024.
+unprivileged ports by default. Give it
+`AmbientCapabilities=CAP_NET_BIND_SERVICE` only if you move a lane below 1024.
 
 ### Container
 
@@ -438,23 +438,23 @@ above port 1024 unless the container is given `CAP_NET_BIND_SERVICE`.
 Every `-stats-every`, one block is logged. What each line means, and what an
 anomaly points at:
 
-| Line | Field | Healthy | Anomaly means |
-| --- | --- | --- | --- |
-| `lane stats` | `dropped` | `0` | Framing faults — a sender is writing malformed objects, or two classes are crossed on one lane |
-| | `errors` | `0` | Per-object handler failures; the paired `submit`/`announce` line says which |
-| `submit stats` | `accepted` | rising | — |
-| | `duplicate` | small | Expected after a failover or reconnect; sustained growth means the delivery side is re-sending |
-| | `rejected` | `0` | The cluster refuses these on merits — missing parents, invalid, frozen. Not retryable |
-| | `failed` | `0` | Propagation unreachable or erroring |
-| `announce stats` | `failures` | `0` | Kafka unreachable, topic missing, or a mis-advertised broker listener |
+| Line              | Field              | Healthy          | Anomaly means                                                                                                                      |
+| ----------------- | ------------------ | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `lane stats`      | `dropped`          | `0`              | Framing faults — a sender is writing malformed objects, or two classes are crossed on one lane                                     |
+|                   | `errors`           | `0`              | Per-object handler failures; the paired `submit`/`announce` line says which                                                        |
+| `submit stats`    | `accepted`         | rising           | —                                                                                                                                  |
+|                   | `duplicate`        | small            | Expected after a failover or reconnect; sustained growth means the delivery side is re-sending                                     |
+|                   | `rejected`         | `0`              | The cluster refuses these on merits — missing parents, invalid, frozen. Not retryable                                              |
+|                   | `failed`           | `0`              | Propagation unreachable or erroring                                                                                                |
+| `announce stats`  | `failures`         | `0`              | Kafka unreachable, topic missing, or a mis-advertised broker listener                                                              |
 | `retrieval stats` | `subtree`, `block` | tracks announces | A flat count against a rising `announce` means the cluster is not pulling — check `-advertise`, `-api-prefix`, and the topic names |
-| | `miss` | `0` | Cache evicted before the pull (raise `-cache-bytes`/`-cache-ttl`), or a `subtree_data` member transaction was never delivered |
-| | `errors` | `0` | A genuine bridge-side fault; each one is logged with the object hash |
-| `reverse stats` | `remote_skipped` | rising | Correct — these are objects that arrived from the fabric, filtered out by origin |
-| | `skipped` | occasional | Object not fully available yet (asset returned `404`) |
-| | `failures` | `0` | Asset fetch, encode, or upward submit failed |
-| | `reconnects` | occasional | Routine: the cluster rolls its gRPC connections |
-| `up-tunnel stats` | `redials` | low | One per dial; a rising count tracks `failures` and means the ingress is flapping |
+|                   | `miss`             | `0`              | Cache evicted before the pull (raise `-cache-bytes`/`-cache-ttl`), or a `subtree_data` member transaction was never delivered      |
+|                   | `errors`           | `0`              | A genuine bridge-side fault; each one is logged with the object hash                                                               |
+| `reverse stats`   | `remote_skipped`   | rising           | Correct — these are objects that arrived from the fabric, filtered out by origin                                                   |
+|                   | `skipped`          | occasional       | Object not fully available yet (asset returned `404`)                                                                              |
+|                   | `failures`         | `0`              | Asset fetch, encode, or upward submit failed                                                                                       |
+|                   | `reconnects`       | occasional       | Routine: the cluster rolls its gRPC connections                                                                                    |
+| `up-tunnel stats` | `redials`          | low              | One per dial; a rising count tracks `failures` and means the ingress is flapping                                                   |
 
 Two log lines deserve alerts of their own:
 
@@ -466,14 +466,14 @@ Two log lines deserve alerts of their own:
 
 Fixed values, listed so they are not mistaken for flags:
 
-| Value | Setting |
-| --- | --- |
-| Seen-registry TTL / capacity | 30 min / 2²⁰ entries |
-| Propagation HTTP timeout | 30 s; 32 idle conns per host, 90 s idle timeout |
-| Kafka produce timeout | 10 s, `RequiredAcks=all-ISR` |
-| Asset fetch timeout | 30 s |
-| Asset rate-limit retry ladder | 200 ms, 1 s, 3 s, 8 s |
-| Blockchain reconnect backoff | 1 s doubling to a 30 s ceiling |
-| Up-tunnel dial / write timeout | 10 s / 30 s |
-| Retrieval server timeouts | 10 s read-header, 10 min write, 120 s idle |
-| Lane TCP keepalive | 30 s |
+| Value                          | Setting                                         |
+| ------------------------------ | ----------------------------------------------- |
+| Seen-registry TTL / capacity   | 30 min / 2²⁰ entries                            |
+| Propagation HTTP timeout       | 30 s; 32 idle conns per host, 90 s idle timeout |
+| Kafka produce timeout          | 10 s, `RequiredAcks=all-ISR`                    |
+| Asset fetch timeout            | 30 s                                            |
+| Asset rate-limit retry ladder  | 200 ms, 1 s, 3 s, 8 s                           |
+| Blockchain reconnect backoff   | 1 s doubling to a 30 s ceiling                  |
+| Up-tunnel dial / write timeout | 10 s / 30 s                                     |
+| Retrieval server timeouts      | 10 s read-header, 10 min write, 120 s idle      |
+| Lane TCP keepalive             | 30 s                                            |
