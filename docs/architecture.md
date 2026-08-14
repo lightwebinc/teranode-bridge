@@ -1,22 +1,21 @@
 # Architecture
 
-`teranode-bridge` is a single Go binary that sits between a push-delivery
-object plane and an **unmodified** Teranode cluster. It terminates the
-per-class object lanes, hands each class to the cluster service that owns it,
-and — in the other direction — publishes what the cluster produces back onto
-the object plane.
+`teranode-bridge` is a single Go binary that sits between a push-delivery object
+plane and an **unmodified** Teranode cluster. It terminates the per-class object
+lanes, hands each class to the cluster service that owns it, and — in the other
+direction — publishes what the cluster produces back onto the object plane.
 
-It is a *shim*, not a node: it validates nothing, stores nothing permanently,
+It is a _shim_, not a node: it validates nothing, stores nothing permanently,
 and holds no chain state. Everything it does is byte movement plus two format
 conversions.
 
 ## Why an announce shim
 
-Teranode learns about subtrees and blocks by **announcement plus pull**: a
-Kafka message carries `{hash, URL}` and the validating service fetches the
-bytes from that URL. The bridge exploits exactly that contract. It already
-*has* the bytes — they were pushed to it — so it stores them, announces itself
-as the source, and serves the resulting pull from the same LAN.
+Teranode learns about subtrees and blocks by **announcement plus pull**: a Kafka
+message carries `{hash, URL}` and the validating service fetches the bytes from
+that URL. The bridge exploits exactly that contract. It already _has_ the bytes
+— they were pushed to it — so it stores them, announces itself as the source,
+and serves the resulting pull from the same LAN.
 
 The result is a fully pushed wide-area path with **no fork of Teranode**: no
 patched ingest, no new RPC, no changed validation. The only thing that changes
@@ -24,18 +23,18 @@ is where the bytes come from — the machine next door instead of a remote peer'
 asset service across the wide area.
 
 Writing directly into Teranode's own stores was considered and rejected: store
-presence is treated as *already validated*, so pre-writing would bypass
+presence is treated as _already validated_, so pre-writing would bypass
 validation entirely. The bridge never weakens validation — the cluster fetches,
 validates, and then owns the data exactly as it would from a peer.
 
 ## Planes
 
-| Plane | Role | Scales with |
-| --- | --- | --- |
-| **Ingest** | lane termination, frame parse, cache write, announce produce | inbound object bandwidth (stateless — round-robin delivery may spray objects across any number of bridges) |
-| **Cache** | content-addressed, TTL'd store of pushed bytes — a cache, not a store of record | delivery rate × validation lag (seconds) |
-| **Retrieval** | serves the cluster's asset-style pulls out of the cache | pull concurrency (stateless replicas behind a VIP) |
-| **Reverse** | blockchain notifications → BRC-143/144 → object-plane submit | one submitter per class |
+| Plane         | Role                                                                            | Scales with                                                                                                |
+| ------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **Ingest**    | lane termination, frame parse, cache write, announce produce                    | inbound object bandwidth (stateless — round-robin delivery may spray objects across any number of bridges) |
+| **Cache**     | content-addressed, TTL'd store of pushed bytes — a cache, not a store of record | delivery rate × validation lag (seconds)                                                                   |
+| **Retrieval** | serves the cluster's asset-style pulls out of the cache                         | pull concurrency (stateless replicas behind a VIP)                                                         |
+| **Reverse**   | blockchain notifications → BRC-143/144 → object-plane submit                    | one submitter per class                                                                                    |
 
 At small scale all four run in one process (`-mode all`, the default). Splitting
 them across processes or hosts is deployment topology, not a different design:
@@ -59,7 +58,7 @@ so there is no affinity and no per-instance URL bookkeeping.
    (BRC-144)                       └──▶ announce ── Kafka ──▶ block     │
                                             {hash, URL}      validation │
                                                                   │     │
-                        :9145 ◀── GET /subtree/{hash} ────────────┴─────┘
+                        :9145 ◀─── GET /subtree/{hash} ───────────┴─────┘
                         retrieval  GET /subtree_data/{hash}
                         plane      POST /subtree/{hash}/txs
                                    GET /block/{hash}
@@ -82,11 +81,11 @@ exactly one class, so the stream is **bare**: no length prefix, no type tag, no
 sync marker. Objects are delimited by walking their own structure, which
 `objfmt.Reader` does:
 
-| Class | Delimited by | Default bind |
-| --- | --- | --- |
-| `tx` (BRC-30 extended format) | walking version, input/output vectors, locktime | `[::]:8833` |
-| `subtree` (BRC-143) | the 40-byte header's `NodeCount` | `[::]:9143` |
-| `block` (BRC-144) | the 104-byte prefix's counts | `[::]:9144` |
+| Class                         | Delimited by                                    | Default bind |
+| ----------------------------- | ----------------------------------------------- | ------------ |
+| `tx` (BRC-30 extended format) | walking version, input/output vectors, locktime | `[::]:8833`  |
+| `subtree` (BRC-143)           | the 40-byte header's `NodeCount`                | `[::]:9143`  |
+| `block` (BRC-144)             | the 104-byte prefix's counts                    | `[::]:9144`  |
 
 Anything that writes bare `objfmt` object streams can feed a lane. In the
 reference stack that is the multicast fabric's delivery side; for tests,
@@ -119,8 +118,8 @@ propagation service.
 
 **Subtrees** (`handleSubtree`) — the frame's first 32 bytes are the merkle root
 in wire order; the node count follows. The object is **stored before it is
-announced**: the cluster does not retry a failed subtree fetch, so the bytes must
-be servable the instant the announcement lands.
+announced**: the cluster does not retry a failed subtree fetch, so the bytes
+must be servable the instant the announcement lands.
 
 **Blocks** (`handleBlock`) — the identity is `SHA256d(header[:80])`, exactly as
 the chain identifies a block. Stored, then announced.
@@ -131,21 +130,21 @@ The lane read loop never waits on the cluster. `handleTx` computes the txid,
 makes **one** immutable copy (shared by cache and pipeline — lane slices alias
 the reader's buffer), marks the seen-registry and enqueues; everything after
 that is the tx pipeline's problem. The pipeline accumulates contiguous batch
-bodies and ships them on propagation's **`POST /txs`** batch endpoint — the
-body format is the same bare concatenated-transaction stream the lane itself
-carries, so no re-encoding happens anywhere.
+bodies and ships them on propagation's **`POST /txs`** batch endpoint — the body
+format is the same bare concatenated-transaction stream the lane itself carries,
+so no re-encoding happens anywhere.
 
 Measured on a 2×18-core host against a mock propagation sink: **1.47M tx/s
-sustained** (three consecutive 30 s runs, stable heap, zero losses), from
-21 tx/s with the original serial per-transaction POST. The serial design
-coupled throughput to cluster latency (1/RTT per connection); batching decouples
-them, and backpressure — a full pipeline queue blocks the lane, closing the TCP
-window — bounds memory when the cluster is slower than the fabric.
+sustained** (three consecutive 30 s runs, stable heap, zero losses), from 21
+tx/s with the original serial per-transaction POST. The serial design coupled
+throughput to cluster latency (1/RTT per connection); batching decouples them,
+and backpressure — a full pipeline queue blocks the lane, closing the TCP window
+— bounds memory when the cluster is slower than the fabric.
 
 Sizing: `-tx-batch`/`-tx-batch-bytes` (clamped to 1023 / 30 MiB), `-tx-linger`
 (latency bound when quiet), `-tx-inflight` (concurrent batch requests),
-`-tx-builders` (parallel accumulators, routed by txid). The `/txs` contract —
-a request must not contain both a parent and its child, because in-batch
+`-tx-builders` (parallel accumulators, routed by txid). The `/txs` contract — a
+request must not contain both a parent and its child, because in-batch
 processing is concurrent — is enforced structurally: each transaction's input
 outpoints are walked, and a dependency on the open batch seals it first.
 Failures that resolve with time (`422`, missing parent — the only use of that
@@ -159,9 +158,9 @@ rather than its gRPC API, for three reasons that all matter to a bridge:
 - The body is the raw transaction — exactly the bytes that arrived on the lane —
   so nothing is re-encoded.
 - HTTP classifies errors correctly. Over gRPC every validator failure flattens
-  into one opaque internal error, so a duplicate is indistinguishable from a real
-  rejection; over HTTP an already-known transaction is a plain `200` and each
-  failure class has its own status.
+  into one opaque internal error, so a duplicate is indistinguishable from a
+  real rejection; over HTTP an already-known transaction is a plain `200` and
+  each failure class has its own status.
 - It needs no generated stubs, so the bridge does not link the cluster's module
   to send a byte slice.
 
@@ -171,12 +170,12 @@ prevout data intact. A transaction that arrives without its prevout data still
 parses — the lane codec delimits it either way — but the cluster refuses it on
 its merits and it lands in the `rejected` counter, not `failed`.
 
-| Status | Outcome | Meaning |
-| --- | --- | --- |
-| `200` | `accepted` | taken (the handler also answers 200 for an already-known transaction) |
-| `409` | `duplicate` | spent / conflicting / locked — the cluster already has this outpoint's spend |
-| `400`, `403`, `422` | `rejected` | refused on merits; retrying the same bytes cannot change the answer |
-| anything else | `failed` | transport or server fault; retryable |
+| Status              | Outcome     | Meaning                                                                      |
+| ------------------- | ----------- | ---------------------------------------------------------------------------- |
+| `200`               | `accepted`  | taken (the handler also answers 200 for an already-known transaction)        |
+| `409`               | `duplicate` | spent / conflicting / locked — the cluster already has this outpoint's spend |
+| `400`, `403`, `422` | `rejected`  | refused on merits; retrying the same bytes cannot change the answer          |
+| anything else       | `failed`    | transport or server fault; retryable                                         |
 
 Multiple `-propagation` endpoints are round-robined per object, which spreads
 long-lived flows across a multi-node cluster or a VIP with no per-object work.
@@ -217,33 +216,34 @@ here needs idempotent-producer or transactional semantics.
 validation and block validation actually call, and nothing else. Two rules shape
 every handler:
 
-- **Never answer `200` with an empty or wrong body.** An empty subtree body is an
-  explicit error in the cluster, and a wrong body fails a root-hash check that
-  would otherwise be a silent corruption. Unknown object ⇒ `404`.
+- **Never answer `200` with an empty or wrong body.** An empty subtree body is
+  an explicit error in the cluster, and a wrong body fails a root-hash check
+  that would otherwise be a silent corruption. Unknown object ⇒ `404`.
 - **Never answer `5xx` for something simply not held.** On the block path a
   server-fault status is classified as recoverable, so the cluster does not
-  commit the Kafka offset and redelivers forever; `404` ends it cleanly and keeps
-  the bridge out of the cluster's malicious-peer classification.
+  commit the Kafka offset and redelivers forever; `404` ends it cleanly and
+  keeps the bridge out of the cluster's malicious-peer classification.
 
-| Route | Answer |
-| --- | --- |
-| `GET {prefix}/subtree/{hash}` | the subtree's node hashes: `numLeaves × 32` raw bytes — precisely the BRC-143 frame with its 40-byte header removed, so no transformation is needed |
-| `GET {prefix}/subtree_data/{hash}` | the member transactions concatenated in node order, skipping the coinbase placeholder at node 0 |
-| `POST {prefix}/subtree/{hash}/txs` | body is raw 32-byte txids with no count or delimiter; response is the matching transactions concatenated (the cluster re-keys by txid, so order does not matter — but the count must match exactly) |
-| `GET {prefix}/block/{hash}` | the block in Teranode's serialization, transcoded from the held BRC-144 frame |
-| `GET {prefix}{prefix}/subtree_data/{hash}` | alias — one caller in the cluster appends the API prefix to an already-prefixed base URL; serving it costs nothing and avoids a failure that would look like a missing object |
-| everything else | `404` |
+| Route                                      | Answer                                                                                                                                                                                              |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET {prefix}/subtree/{hash}`              | the subtree's node hashes: `numLeaves × 32` raw bytes — precisely the BRC-143 frame with its 40-byte header removed, so no transformation is needed                                                 |
+| `GET {prefix}/subtree_data/{hash}`         | the member transactions concatenated in node order, skipping the coinbase placeholder at node 0                                                                                                     |
+| `POST {prefix}/subtree/{hash}/txs`         | body is raw 32-byte txids with no count or delimiter; response is the matching transactions concatenated (the cluster re-keys by txid, so order does not matter — but the count must match exactly) |
+| `GET {prefix}/block/{hash}`                | the block in Teranode's serialization, transcoded from the held BRC-144 frame                                                                                                                       |
+| `GET {prefix}{prefix}/subtree_data/{hash}` | alias — one caller in the cluster appends the API prefix to an already-prefixed base URL; serving it costs nothing and avoids a failure that would look like a missing object                       |
+| everything else                            | `404`                                                                                                                                                                                               |
 
 A missing member on `subtree_data` yields a clean `404` rather than a partial
 body: a partial body fails the cluster's per-index txid check anyway, and the
 `404` lets it fall back to the batch route.
 
-Transactions are served in **standard** serialization: if a cached transaction is
-in extended format it is converted first. The txid is unchanged either way, and
-matching the cluster's own asset behaviour keeps the bridge maximally boring.
+Transactions are served in **standard** serialization: if a cached transaction
+is in extended format it is converted first. The txid is unchanged either way,
+and matching the cluster's own asset behaviour keeps the bridge maximally
+boring.
 
-Server timeouts: 10 s read-header, 10 min write (a large subtree streams),
-120 s idle.
+Server timeouts: 10 s read-header, 10 min write (a large subtree streams), 120 s
+idle.
 
 ## Cache and seen-registry
 
@@ -258,8 +258,8 @@ own, after validation. The working set is delivery rate × validation lag —
 seconds of traffic — so eviction is a normal event, not data loss. A pull that
 misses returns `404` and the cluster falls back to its ordinary peer-pull path.
 
-`internal/registry` is a TTL'd set of hashes with the direction each was seen in.
-It does two jobs that look similar but are not:
+`internal/registry` is a TTL'd set of hashes with the direction each was seen
+in. It does two jobs that look similar but are not:
 
 - **Down (delivery)** — suppress re-injection of an object already handed to the
   cluster. Failover and reconnects legitimately re-deliver.
@@ -286,7 +286,7 @@ numbers are load-bearing on the wire.
 2. **Filter by origin.** The notification stream carries **no local-vs-remote
    marker** — the node's own p2p announces every notification to its gossip
    peers, because in gossip any validator is a legitimate serve source. So the
-   origin filter is the seen registry: a hash the bridge delivered *into* the
+   origin filter is the seen registry: a hash the bridge delivered _into_ the
    cluster is remote in origin and must not be pushed back; a hash it already
    submitted is its own push coming back around. What remains is what this
    cluster produced.
@@ -300,26 +300,27 @@ numbers are load-bearing on the wire.
 3. **Fetch and encode.** `internal/tnasset` pulls the object back out of the
    cluster's asset service and `internal/encode` builds the push frame.
    - Subtree: `GET /subtree/{hash}` returns the member hash list; the announced
-     hash *is* the merkle root, so the frame's root field and the identity the
+     hash _is_ the merkle root, so the frame's root field and the identity the
      cluster gave us are the same value — no recomputation, and no chance of
      publishing a root that disagrees with the node list.
-   - Block: `GET /block/{hash}` returns everything the frame needs, including the
-     coinbase and its BUMP, so no part of the block is reconstructed or guessed.
+   - Block: `GET /block/{hash}` returns everything the frame needs, including
+     the coinbase and its BUMP, so no part of the block is reconstructed or
+     guessed.
    - `404` means "not ours to publish, or not written yet" and is skipped, not
      failed.
    - The asset API's rate limiter trips readily — a burst of mined blocks
-     produces a burst of notifications, each one a fetch — so `429` is retried on
-     a `200 ms / 1 s / 3 s / 8 s` ladder. Without it, a catch-up window would
+     produces a burst of notifications, each one a fetch — so `429` is retried
+     on a `200 ms / 1 s / 3 s / 8 s` ladder. Without it, a catch-up window would
      silently drop objects and nothing downstream could tell the difference
      between "the miner produced nothing" and "we were throttled".
 
-4. **Register, then send.** The hash is marked `submitted` *before* the send,
+4. **Register, then send.** The hash is marked `submitted` _before_ the send,
    because the object comes straight back down the bridge's own delivery lanes
    and must be recognised as ours when it does. The exact bytes are kept so that
    unavoidable echo becomes a free correctness check (below).
 
-5. **Submit.** `internal/submit.UpTunnel` holds one long-lived TCP connection per
-   class to the object-plane ingress (`8726` subtree, `8727` block by
+5. **Submit.** `internal/submit.UpTunnel` holds one long-lived TCP connection
+   per class to the object-plane ingress (`8726` subtree, `8727` block by
    convention). The stream is bare, so a partial write leaves the receiver's
    parser mid-object with no way to resynchronise: the only correct recovery is
    to drop the connection and redial, which is what a failed write does.
@@ -328,21 +329,21 @@ Every frame is self-verified against the shared codec before it leaves the
 process. A frame that sizes wrong would not merely be rejected — it would
 desynchronise the stream and cost every object behind it.
 
-**Submitter role.** Exactly one bridge per cluster should hold `-submitter` for a
-given class. A bridge with `-submitter=false` still runs its delivery lanes and
-retrieval plane; only the reverse path stays idle. Promotion is manual.
+**Submitter role.** Exactly one bridge per cluster should hold `-submitter` for
+a given class. A bridge with `-submitter=false` still runs its delivery lanes
+and retrieval plane; only the reverse path stays idle. Promotion is manual.
 
 ## Echo verification
 
 Own-traffic exclusion covers only the tx class, so everything this cluster
-publishes returns to it on its own subtree and block lanes. That is not waste: it
-is a free end-to-end proof that what the fabric carried is byte-for-byte what was
-sent — across encode, submit, reframe, multicast, strip and deliver.
+publishes returns to it on its own subtree and block lanes. That is not waste:
+it is a free end-to-end proof that what the fabric carried is byte-for-byte what
+was sent — across encode, submit, reframe, multicast, strip and deliver.
 
-On arrival, an object whose hash is registered as `submitted` is compared against
-the stored copy. Equal ⇒ `echo verified byte-identical` at info level. Different
-⇒ `ECHO MISMATCH` at error level, because the object plane is corrupting data.
-Either way the object is then dropped as a duplicate.
+On arrival, an object whose hash is registered as `submitted` is compared
+against the stored copy. Equal ⇒ `echo verified byte-identical` at info level.
+Different ⇒ `ECHO MISMATCH` at error level, because the object plane is
+corrupting data. Either way the object is then dropped as a duplicate.
 
 ## Byte order
 
@@ -360,10 +361,10 @@ through this one package.
 
 ## Block frame conversion
 
-`internal/tnwire` converts between Teranode's block serialization and the BRC-144
-push frame in both directions, deliberately in one file so they cannot drift. The
-two formats carry identical information in identical order and differ only in how
-four counts are written:
+`internal/tnwire` converts between Teranode's block serialization and the
+BRC-144 push frame in both directions, deliberately in one file so they cannot
+drift. The two formats carry identical information in identical order and differ
+only in how four counts are written:
 
 ```
 BRC-144:  header[80] | txCount u64BE | size u64BE | subtreeCount u64BE |
@@ -374,18 +375,18 @@ Teranode: header[80] | varint txCount | varint size | varint subtreeCount |
 ```
 
 BRC-144's fixed 8-byte big-endian fields let a frame be sized without parsing;
-Teranode uses Bitcoin CompactSize varints. The 80-byte header, the subtree roots,
-the in-band coinbase and the coinbase BUMP are byte-for-byte the same in both. A
-round trip through the pair is lossless, which the tests assert.
+Teranode uses Bitcoin CompactSize varints. The 80-byte header, the subtree
+roots, the in-band coinbase and the coinbase BUMP are byte-for-byte the same in
+both. A round trip through the pair is lossless, which the tests assert.
 
 Two details are enforced rather than passed through:
 
 - An all-zero subtree root is rejected in both directions — Teranode rejects it
   outright, and catching it here turns an opaque cluster-side parse failure into
   a clear error.
-- On decode, the trailing BUMP length is optional: Teranode's own parser tolerates
-  a body that ends right after the height, so this does too and yields an empty
-  BUMP.
+- On decode, the trailing BUMP length is optional: Teranode's own parser
+  tolerates a body that ends right after the height, so this does too and yields
+  an empty BUMP.
 
 The coinbase is delimited by walking its transaction structure, so it must parse
 exactly — a trailing byte would swallow the height field.
@@ -401,19 +402,19 @@ and to isolate object-plane faults from cluster-side ones.
 
 ## Failure modes
 
-| Failure | Absorbed by |
-| --- | --- |
-| Delivery link flaps / fails over | Lanes accept redials; the seen registry drops re-delivered objects; the cache keeps the original bytes |
-| Malformed object on a lane | Connection dropped (no resync point exists), `dropped` incremented, sender redials |
-| Propagation endpoint down | Round-robin spreads to the remaining endpoints; the object counts as `failed` and is logged |
-| Cluster refuses a transaction on merits | `rejected` — not retried; retrying identical bytes cannot change the answer |
-| Kafka unreachable | `announce failures` increments; the object stays cached until TTL, and the cluster never learns of it |
-| Cache entry evicted before the pull | Pull answers `404`; the cluster falls back to its ordinary peer announce-and-pull path |
-| Asset API rate-limits the reverse path | Retry ladder; after exhaustion the object is a `failure` and is not published |
-| Blockchain stream lost | Reconnect with backoff; `reconnects` increments |
-| Up-tunnel write fails | Connection closed and redialled on the next object; `failures` and `redials` increment |
-| Bridge restart | Registry rebuilt lazily; the cluster's hash dedup absorbs re-injection |
-| Submitter down | No corruption, just a gap: the fabric misses this cluster's output until a standby is promoted |
+| Failure                                 | Absorbed by                                                                                            |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Delivery link flaps / fails over        | Lanes accept redials; the seen registry drops re-delivered objects; the cache keeps the original bytes |
+| Malformed object on a lane              | Connection dropped (no resync point exists), `dropped` incremented, sender redials                     |
+| Propagation endpoint down               | Round-robin spreads to the remaining endpoints; the object counts as `failed` and is logged            |
+| Cluster refuses a transaction on merits | `rejected` — not retried; retrying identical bytes cannot change the answer                            |
+| Kafka unreachable                       | `announce failures` increments; the object stays cached until TTL, and the cluster never learns of it  |
+| Cache entry evicted before the pull     | Pull answers `404`; the cluster falls back to its ordinary peer announce-and-pull path                 |
+| Asset API rate-limits the reverse path  | Retry ladder; after exhaustion the object is a `failure` and is not published                          |
+| Blockchain stream lost                  | Reconnect with backoff; `reconnects` increments                                                        |
+| Up-tunnel write fails                   | Connection closed and redialled on the next object; `failures` and `redials` increment                 |
+| Bridge restart                          | Registry rebuilt lazily; the cluster's hash dedup absorbs re-injection                                 |
+| Submitter down                          | No corruption, just a gap: the fabric misses this cluster's output until a standby is promoted         |
 
 ## Package layout
 
@@ -438,33 +439,33 @@ proto/blockchain_api/    minimal wire-compatible blockchain Subscribe subset
 The bridge logs structured lines via `log/slog` (text handler, stdout) and emits
 a stats block every `-stats-every` (default 60 s, `0` disables):
 
-| Line | Fields |
-| --- | --- |
-| `lane stats` | per lane: `conns`, `objects`, `bytes`, `errors`, `dropped` |
-| `cache stats` | `objects`, `object_bytes`, `txs`, `tx_bytes`, `evicted` |
-| `registry stats` | `entries`, `duplicates` |
-| `submit stats` | `accepted`, `duplicate`, `rejected`, `failed` |
-| `announce stats` | `subtrees`, `blocks`, `failures` |
-| `retrieval stats` | `subtree`, `subtree_data`, `txs`, `block`, `miss`, `errors` |
-| `reverse stats` | `subtrees_up`, `blocks_up`, `remote_skipped`, `skipped`, `failures`, `reconnects` |
-| `up-tunnel stats` | per class: `sent`, `bytes`, `failures`, `redials` |
+| Line              | Fields                                                                            |
+| ----------------- | --------------------------------------------------------------------------------- |
+| `lane stats`      | per lane: `conns`, `objects`, `bytes`, `errors`, `dropped`                        |
+| `cache stats`     | `objects`, `object_bytes`, `txs`, `tx_bytes`, `evicted`                           |
+| `registry stats`  | `entries`, `duplicates`                                                           |
+| `submit stats`    | `accepted`, `duplicate`, `rejected`, `failed`                                     |
+| `announce stats`  | `subtrees`, `blocks`, `failures`                                                  |
+| `retrieval stats` | `subtree`, `subtree_data`, `txs`, `block`, `miss`, `errors`                       |
+| `reverse stats`   | `subtrees_up`, `blocks_up`, `remote_skipped`, `skipped`, `failures`, `reconnects` |
+| `up-tunnel stats` | per class: `sent`, `bytes`, `failures`, `redials`                                 |
 
 A final stats block is emitted on clean shutdown. `SIGINT`/`SIGTERM` cancels the
-root context, which closes the listeners *and* the open lane connections — the
-latter matters because a reader parked on a long-lived connection would otherwise
-block shutdown indefinitely.
+root context, which closes the listeners _and_ the open lane connections — the
+latter matters because a reader parked on a long-lived connection would
+otherwise block shutdown indefinitely.
 
 ### Endpoints
 
 `-metrics-addr` (default `[::]:9146`) serves the same four routes as every other
 service in the stack:
 
-| Route | Answer |
-| --- | --- |
-| `GET /metrics` | Prometheus exposition, `btb_` prefix, plus `go_*`/`process_*` |
-| `GET /healthz` | always `200` — the process is alive |
-| `GET /readyz` | `200` once **every lane is bound**; `503` before that, because until then the bridge cannot accept delivery |
-| `POST /loglevel` | runtime log level change (also `SIGHUP`, which toggles debug) |
+| Route            | Answer                                                                                                      |
+| ---------------- | ----------------------------------------------------------------------------------------------------------- |
+| `GET /metrics`   | Prometheus exposition, `btb_` prefix, plus `go_*`/`process_*`                                               |
+| `GET /healthz`   | always `200` — the process is alive                                                                         |
+| `GET /readyz`    | `200` once **every lane is bound**; `503` before that, because until then the bridge cannot accept delivery |
+| `POST /loglevel` | runtime log level change (also `SIGHUP`, which toggles debug)                                               |
 
 The metrics are read from the same `Stats()` snapshots the log lines use — the
 collector pulls them at scrape time rather than incrementing a second set of
@@ -472,14 +473,14 @@ counters, so the two can never disagree. A nil subsystem contributes no series,
 which is why a sink exposes lane and cache metrics and nothing else.
 
 Two counters have no other home and are owned by the metrics package:
-`btb_echo_verified_total` and `btb_echo_mismatch_total`. **`btb_echo_mismatch_total`
-is the alert that matters** — non-zero means the object plane altered bytes in
-flight.
+`btb_echo_verified_total` and `btb_echo_mismatch_total`.
+**`btb_echo_mismatch_total` is the alert that matters** — non-zero means the
+object plane altered bytes in flight.
 
 This binary registers directly on the Prometheus registry rather than routing
-cold-path counters through the OTel SDK as the rest of the stack does. The bridge
-has no per-packet path, so the SDK's cost was never the deciding factor, and a
-directly registered counter is **present at zero** — which is what lets
+cold-path counters through the OTel SDK as the rest of the stack does. The
+bridge has no per-packet path, so the SDK's cost was never the deciding factor,
+and a directly registered counter is **present at zero** — which is what lets
 `btb_echo_mismatch_total == 0` be a meaningful alert rather than an expression
 that silently matches nothing on a freshly restarted process. The trade is no
 OTLP push; scrape it.
