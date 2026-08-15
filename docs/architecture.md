@@ -99,6 +99,11 @@ Connection handling reflects the bare framing:
   sender is expected to redial.
 - **Handler error → count and continue.** A cluster-side failure on one object
   must not cost the rest of the stream.
+- **Format refusal → count and continue.** A well-framed object that does not
+  satisfy the lane's format policy is discarded and counted in `rejected`,
+  separately from `errors`: framing was never in doubt, so the connection stays.
+  The `tx` lane carries BRC-30 EF only — a BRC-12 standard transaction is
+  refused here (see below).
 - **Clean EOF, mid-stream reset, or a connection that closed before a whole
   object** are all logged as ordinary events, not faults — they are health
   probes, pool rotations and reconnects.
@@ -166,9 +171,13 @@ rather than its gRPC API, for three reasons that all matter to a bridge:
 
 Extended format is preserved rather than re-encoded, which is what makes the
 path work at all: the cluster requires EF, and EF is what reaches the validator,
-prevout data intact. A transaction that arrives without its prevout data still
-parses — the lane codec delimits it either way — but the cluster refuses it on
-its merits and it lands in the `rejected` counter, not `failed`.
+prevout data intact. A BRC-12 standard transaction still *parses* — the lane
+codec delimits it either way — so the lane gates on the EF marker explicitly and
+refuses it on arrival (`btb_lane_objects_rejected_total{lane="tx"}`). Deferring
+that to the cluster would be worse than late: the transaction would first take a
+cache slot and a registry entry, and that registry entry would then suppress the
+EF copy of the same transaction as a duplicate, since both serializations share
+one txid.
 
 | Status              | Outcome     | Meaning                                                                      |
 | ------------------- | ----------- | ---------------------------------------------------------------------------- |

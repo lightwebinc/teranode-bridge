@@ -64,7 +64,7 @@ func (s *stringList) Set(v string) error {
 
 func main() {
 	var (
-		txListen      = flag.String("tx-listen", "[::]:8833", "delivery lane: transactions (BRC-30 EF)")
+		txListen      = flag.String("tx-listen", "[::]:8833", "delivery lane: transactions (BRC-30 EF only; a BRC-12 standard transaction is refused at the lane)")
 		subtreeListen = flag.String("subtree-listen", "[::]:9143", "delivery lane: subtrees (BRC-143)")
 		blockListen   = flag.String("block-listen", "[::]:9144", "delivery lane: blocks (BRC-144)")
 
@@ -332,9 +332,19 @@ func main() {
 // and enqueues it for batched submission. The read loop never waits on the
 // cluster: submission latency is the pipe's problem, and backpressure arrives
 // only when the pipe's queue is full.
+//
+// The lane carries BRC-30 extended format only. A BRC-12 standard transaction
+// is well-framed and walks fine, so nothing downstream would catch it until
+// propagation refuses it on its merits — by which point it has consumed a cache
+// slot, a registry entry (poisoning dedupe for the EF copy that follows) and a
+// batch slot, and the refusal reads as a cluster fault instead of a sender bug.
+// Refuse it here, where the cause is still legible.
 func handleTx(ctx context.Context, obj []byte, txs *cache.Generational, seen *registry.Registry,
 	pipe *txpipe.Pipe) error {
 
+	if !objfmt.IsEF(obj) {
+		return fmt.Errorf("%w: not BRC-30 extended format (%d bytes)", lanes.ErrReject, len(obj))
+	}
 	id, err := objfmt.TxID(obj)
 	if err != nil {
 		return fmt.Errorf("txid: %w", err)
@@ -456,7 +466,7 @@ func logStats(log *slog.Logger, laneSet []*lanes.Lane, objects *cache.Cache, txs
 	for _, l := range laneSet {
 		st := l.Stats()
 		log.Info("lane stats", "lane", st.Name, "conns", st.Conns, "objects", st.Objects,
-			"bytes", st.Bytes, "errors", st.Errors, "dropped", st.Dropped)
+			"bytes", st.Bytes, "errors", st.Errors, "dropped", st.Dropped, "rejected", st.Rejected)
 	}
 	objStats, txStats := objects.Stats(), txs.Stats()
 	log.Info("cache stats", "objects", objStats.Entries, "object_bytes", objStats.Bytes,

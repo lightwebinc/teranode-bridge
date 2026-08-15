@@ -21,7 +21,7 @@ their own structure.
 
 | Flag              | Default     | Description                                                                                                                                                |
 | ----------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-tx-listen`      | `[::]:8833` | Transaction lane (BRC-30 extended format — the cluster requires EF; a transaction without prevout data is refused on its merits and counts as `rejected`). |
+| `-tx-listen`      | `[::]:8833` | Transaction lane (BRC-30 extended format only — a BRC-12 standard transaction is refused at the lane and counted in `btb_lane_objects_rejected_total{lane="tx"}`, never submitted). |
 | `-subtree-listen` | `[::]:9143` | Subtree lane (BRC-143 push frames).                                                                                                                        |
 | `-block-listen`   | `[::]:9144` | Block lane (BRC-144 push frames).                                                                                                                          |
 | `-max-object`     | `0`         | Per-object size ceiling in bytes. `0` uses the `objfmt` codec default of 64 MiB. Applies to every lane.                                                    |

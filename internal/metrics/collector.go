@@ -21,6 +21,8 @@ var (
 		"Objects whose handler failed. The object is lost; the connection is kept.", []string{"lane"}, nil)
 	laneDropped = prometheus.NewDesc("btb_lane_connections_dropped_total",
 		"Connections dropped on a framing fault. Bare streams have no resync point, so every byte after a codec fault is suspect and the connection must go.", []string{"lane"}, nil)
+	laneRejected = prometheus.NewDesc("btb_lane_objects_rejected_total",
+		"Well-framed objects refused on lane format policy — on `tx`, a transaction that is not BRC-30 extended format. The object is discarded and the connection kept; a non-zero rate means a sender is emitting the wrong format, not that the cluster is unhealthy.", []string{"lane"}, nil)
 
 	cacheEntries = prometheus.NewDesc("btb_cache_entries",
 		"Objects currently held.", []string{"kind"}, nil)
@@ -112,7 +114,7 @@ func emitCache(gauge, counter func(*prometheus.Desc, float64, ...string), kind s
 
 func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 	for _, d := range []*prometheus.Desc{
-		laneConns, laneObjects, laneBytes, laneErrors, laneDropped,
+		laneConns, laneObjects, laneBytes, laneErrors, laneDropped, laneRejected,
 		cacheEntries, cacheBytes, cacheStored, cacheHits, cacheMisses, cacheEvicted, cacheExpired,
 		registryEntries, registryDups, submitTotal, announceTotal, announceFailures,
 		pipeBatches, pipeSeals, pipeRetried, pipeRetryOK,
@@ -144,6 +146,7 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(laneBytes, float64(s.Bytes), s.Name)
 		counter(laneErrors, float64(s.Errors), s.Name)
 		counter(laneDropped, float64(s.Dropped), s.Name)
+		counter(laneRejected, float64(s.Rejected), s.Name)
 	}
 
 	if src.Objects != nil {

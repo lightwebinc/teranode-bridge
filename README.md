@@ -120,7 +120,7 @@ See [docs/configuration.md](docs/configuration.md) for the full flag reference.
 
 | Port | Direction | Carries |
 | --- | --- | --- |
-| `8833` | in | transaction lane (BRC-30 extended format) |
+| `8833` | in | transaction lane (BRC-30 extended format only; standard-format transactions are refused) |
 | `9143` | in | subtree lane (BRC-143 push frames) |
 | `9144` | in | block lane (BRC-144 push frames) |
 | `9145` | in | retrieval plane — the cluster's pulls |

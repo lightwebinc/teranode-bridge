@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -173,6 +174,40 @@ func TestHandlerErrorKeepsConnection(t *testing.T) {
 	})
 	if l.Stats().Dropped != 0 {
 		t.Fatal("handler errors must not drop the connection")
+	}
+}
+
+// TestRejectIsNotAnError pins the admission refusal: an object the handler
+// refuses on format policy counts as Rejected, not Errors, and the stream
+// carries on — framing was never in doubt.
+func TestRejectIsNotAnError(t *testing.T) {
+	var c captured
+	l, addr, _ := startLane(t, func(_ context.Context, obj []byte) error {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.objs = append(c.objs, bytes.Clone(obj))
+		if obj[0] == 0x0A {
+			return fmt.Errorf("%w: policy", ErrReject)
+		}
+		return nil
+	}, 0)
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two := append(subtreeFrame(0x0A, 1), subtreeFrame(0x0B, 1)...)
+	if _, err := conn.Write(two); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+
+	waitCond(t, "one refused, one accepted", func() bool {
+		s := l.Stats()
+		return s.Objects == 2 && s.Rejected == 1
+	})
+	if s := l.Stats(); s.Errors != 0 || s.Dropped != 0 {
+		t.Fatalf("refusal must not count as error or drop the connection: %+v", s)
 	}
 }
 

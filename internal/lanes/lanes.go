@@ -28,6 +28,13 @@ import (
 // object should not cost us the rest of the stream.
 type Handler func(ctx context.Context, obj []byte) error
 
+// ErrReject marks a handler error as an admission refusal rather than a
+// failure: the object was well-framed but does not satisfy the lane's format
+// policy, so it is discarded on purpose. Framing is intact, so the connection
+// stays and the counter is separate from Errors — a refused object is the
+// sender's bug, an error is ours or the cluster's.
+var ErrReject = errors.New("rejected")
+
 // Lane is one class listener.
 type Lane struct {
 	Name   string // "tx" | "subtree" | "block"
@@ -58,31 +65,33 @@ func (l *Lane) ListenerAddr() net.Addr {
 
 // Counters are per-lane totals, read via Stats.
 type Counters struct {
-	Conns   atomic.Uint64
-	Active  atomic.Int64 // connections open right now
-	Objects atomic.Uint64
-	Bytes   atomic.Uint64
-	Errors  atomic.Uint64
-	Dropped atomic.Uint64 // connections dropped on malformed framing
+	Conns    atomic.Uint64
+	Active   atomic.Int64 // connections open right now
+	Objects  atomic.Uint64
+	Bytes    atomic.Uint64
+	Errors   atomic.Uint64
+	Dropped  atomic.Uint64 // connections dropped on malformed framing
+	Rejected atomic.Uint64 // objects refused on format policy (ErrReject)
 }
 
 // Stats is a snapshot.
 type Stats struct {
-	Name                                   string
-	Conns, Objects, Bytes, Errors, Dropped uint64
-	Active                                 int64
+	Name                                             string
+	Conns, Objects, Bytes, Errors, Dropped, Rejected uint64
+	Active                                           int64
 }
 
 // Stats returns a snapshot of this lane's counters.
 func (l *Lane) Stats() Stats {
 	return Stats{
-		Name:    l.Name,
-		Conns:   l.counts.Conns.Load(),
-		Active:  l.counts.Active.Load(),
-		Objects: l.counts.Objects.Load(),
-		Bytes:   l.counts.Bytes.Load(),
-		Errors:  l.counts.Errors.Load(),
-		Dropped: l.counts.Dropped.Load(),
+		Name:     l.Name,
+		Conns:    l.counts.Conns.Load(),
+		Active:   l.counts.Active.Load(),
+		Objects:  l.counts.Objects.Load(),
+		Bytes:    l.counts.Bytes.Load(),
+		Errors:   l.counts.Errors.Load(),
+		Dropped:  l.counts.Dropped.Load(),
+		Rejected: l.counts.Rejected.Load(),
 	}
 }
 
@@ -212,6 +221,12 @@ func (l *Lane) serveConn(ctx context.Context, conn net.Conn) {
 		l.counts.Bytes.Add(uint64(len(obj)))
 
 		if err := l.Handle(ctx, obj); err != nil {
+			if errors.Is(err, ErrReject) {
+				l.counts.Rejected.Add(1)
+				l.Log.Warn("lane object refused", "lane", l.Name, "remote", remote,
+					"bytes", len(obj), "err", err)
+				continue
+			}
 			l.counts.Errors.Add(1)
 			l.Log.Error("lane handler failed", "lane", l.Name, "bytes", len(obj), "err", err)
 		}
