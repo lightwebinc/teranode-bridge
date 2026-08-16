@@ -38,7 +38,7 @@ import (
 const (
 	repoName     = "teranode-bridge"
 	commonModule = "github.com/lightwebinc/shard-common"
-	goImage      = "golang:1.25-alpine"
+	goImage      = "golang:1.26-alpine"
 	lintImage    = "golangci/golangci-lint:v2.12.2-alpine"
 )
 
