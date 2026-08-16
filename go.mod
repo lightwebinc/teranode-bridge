@@ -1,6 +1,6 @@
 module github.com/lightwebinc/teranode-bridge
 
-go 1.25.12
+go 1.25.13
 
 require (
 	github.com/lightwebinc/shard-common v0.19.2
