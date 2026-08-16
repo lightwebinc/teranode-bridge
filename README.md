@@ -26,21 +26,15 @@ plane — while the Teranode cluster itself stays **vanilla**.
 
 ## Why an announce shim
 
-Teranode learns about subtrees and blocks by *announcement plus pull*: a Kafka
-message carries `{hash, URL}` and the validating service fetches the bytes from
-that URL. The bridge exploits exactly that contract — it already **has** the
-bytes (they were pushed to it), so it stores them, announces itself as the
-source, and serves the pull from the same LAN.
+Teranode learns about subtrees and blocks by *announcement plus pull*. The bridge
+already **has** the bytes — they were pushed to it — so it stores them, announces
+itself as the source, and serves the resulting pull from the same LAN. That buys
+a fully pushed wide-area path with **no fork of Teranode**, and the cluster still
+fetches and validates exactly as it would from a peer.
 
-The result is a fully pushed wide-area path with **no fork of Teranode**: no
-patched ingest, no new RPC, no changed validation. The only thing that changes is
-where the bytes come from — the machine next door instead of a remote peer's
-asset service across the wide area.
-
-Writing directly into Teranode's own stores was considered and rejected: store
-presence is treated as *already validated*, so pre-writing would bypass
-validation entirely. The bridge never weakens validation — the cluster fetches,
-validates, and then owns the data exactly as it would from a peer.
+[Architecture › Why an announce shim](docs/architecture.md#why-an-announce-shim)
+covers the contract in full, including why writing into Teranode's own stores was
+rejected.
 
 ## Planes
 
@@ -150,8 +144,8 @@ set — the bridge is configured entirely by flags, so pass them as the containe
 command or Helm `args`.
 
 ```bash
-docker build --build-arg VERSION=0.3.0 -t teranode-bridge:0.3.0 .
-docker run --rm teranode-bridge:0.3.0 -mode sink
+docker build --build-arg VERSION=0.5.0 -t teranode-bridge:0.5.0 .
+docker run --rm teranode-bridge:0.5.0 -mode sink
 ```
 
 Published images are gated behind a manual `image-publish` workflow run
@@ -191,16 +185,20 @@ submitter-role scaling rules.
 ├── internal/
 │   ├── lanes/               # per-class TCP listeners over bare object streams
 │   ├── submit/              # propagation HTTP submit + upward object submit
+│   ├── txpipe/              # batching transaction submit pipeline (POST /txs)
 │   ├── announce/            # Kafka {hash, URL} producer + wire codec
 │   ├── cache/               # hash-keyed LRU with TTL and byte ceiling
 │   ├── registry/            # TTL'd seen-set with direction
 │   ├── retrieval/           # the asset-API subset the cluster pulls from
 │   ├── tnasset/             # the mirror: pulls objects back out of the cluster
+│   ├── reverse/             # blockchain Subscribe → origin filter → publish up
 │   ├── encode/              # BRC-143 / BRC-144 push-frame builders
 │   ├── tnwire/              # BRC-144 ⇄ Teranode block serialization
+│   ├── metrics/             # Prometheus collector over Stats()
 │   └── hashid/              # internal ⇄ display byte order, in one place
 ├── proto/blockchain_api/    # minimal wire-compatible Subscribe subset
 ├── ci/                      # Dagger CI driver
+├── hack/tnbench/            # throughput bench rig (mock propagation + feeder)
 ├── docs/                    # architecture + configuration
 ├── Dockerfile
 ├── Makefile

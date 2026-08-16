@@ -148,18 +148,27 @@ func main() {
 				}
 				defer func() { _ = conn.Close() }()
 				w := bufio.NewWriterSize(conn, 1<<20)
-				tx := make([]byte, 70)
-				// version | in=1 | prev32 | vout | scriptLen=9 | script9 | seq |
+				tx := make([]byte, 86)
+				// The lane carries BRC-30 EF only, so the template is EF: a
+				// standard transaction is refused on arrival and the rig would
+				// measure the reject path instead of the pipeline.
+				//
+				// version | EF marker | in=1 | prev32 | vout | scriptLen=9 |
+				// script9 | seq | spentValue8 | spentLen=1 | OP_TRUE |
 				// out=1 | value8 | len=1 | OP_TRUE | locktime
 				tx[0] = 1                                               // version
-				tx[4] = 1                                               // input count
-				tx[41] = 9                                              // unlocking script len
-				tx[51], tx[52], tx[53], tx[54] = 0xFF, 0xFF, 0xFF, 0xFF // sequence
-				tx[55] = 1                                              // output count
-				tx[56] = 1                                              // value = 1 sat
-				tx[64] = 1                                              // locking script len
-				tx[65] = 0x51                                           // OP_TRUE
-				// layout: prev txid [5:37), script [42:51), locktime [66:70)
+				tx[9] = 0xEF                                            // EF marker: bytes 4..9 = 00 00 00 00 00 EF
+				tx[10] = 1                                              // input count
+				tx[47] = 9                                              // unlocking script len
+				tx[57], tx[58], tx[59], tx[60] = 0xFF, 0xFF, 0xFF, 0xFF // sequence
+				tx[61] = 1                                              // spent value = 1 sat
+				tx[69] = 1                                              // spent locking script len
+				tx[70] = 0x51                                           // spent locking script: OP_TRUE
+				tx[71] = 1                                              // output count
+				tx[72] = 1                                              // value = 1 sat
+				tx[80] = 1                                              // locking script len
+				tx[81] = 0x51                                           // OP_TRUE
+				// layout: prev txid [11:43), script [48:57), locktime [82:86)
 				var ctr uint64
 				var prev [32]byte // last txid this connection emitted
 				for time.Now().Before(stop) {
@@ -170,13 +179,13 @@ func main() {
 							// stream, which is what the fabric actually
 							// carries, and the only way to exercise the
 							// dependency sealing and missing-parent retry.
-							copy(tx[5:37], prev[:])
+							copy(tx[11:43], prev[:])
 						} else {
-							binary.LittleEndian.PutUint64(tx[5:], ctr) // prev txid varies
-							tx[13] = cid
+							binary.LittleEndian.PutUint64(tx[11:], ctr) // prev txid varies
+							tx[19] = cid
 						}
-						binary.LittleEndian.PutUint64(tx[42:], ctr) // script varies -> unique txid
-						tx[50] = cid
+						binary.LittleEndian.PutUint64(tx[48:], ctr) // script varies -> unique txid
+						tx[56] = cid
 						if *chain {
 							prev = txid(tx)
 						}

@@ -48,7 +48,7 @@ so there is no affinity and no per-instance URL bookkeeping.
  ───────────────────────────────────────────────────────────────────────────────
 
    tx lane      ─────────▶ :8833 ──┬──▶ tx cache
-   (BRC-30 EF)                     └──▶ submit ──── POST /tx ─────▶ propagation
+   (BRC-30 EF)                     └──▶ txpipe ── POST /txs (batched) ──▶ propagation
 
    subtree lane ─────────▶ :9143 ──┬──▶ object cache
    (BRC-143)                       └──▶ announce ── Kafka ────────▶ subtree
@@ -153,7 +153,8 @@ request must not contain both a parent and its child, because in-batch
 processing is concurrent — is enforced structurally: each transaction's input
 outpoints are walked, and a dependency on the open batch seals it first.
 Failures that resolve with time (`422`, missing parent — the only use of that
-status) retry individually with a short ladder; merit rejections do not.
+status) retry as a single further batch on a short ladder, bounded by the same
+inflight semaphore; merit rejections do not.
 
 ## Submitting transactions — single (legacy detail)
 
@@ -201,7 +202,7 @@ The subtree and block topic messages have the same shape — three string fields
 ```
 field 1: hash     object hash, hex, display (reversed) order
 field 2: URL      base URL of the server that will serve the bytes
-field 3: peer_id  originating peer identity (omitted; see below)
+field 3: peer_id  synthetic peer identity (required; see below)
 ```
 
 They are encoded with the low-level protobuf wire encoder rather than generated
@@ -209,12 +210,16 @@ stubs: pulling in the cluster's generated package would drag its entire module
 into a small binary. Fields are written in ascending order and empty strings are
 omitted, which is what proto3's canonical encoder does.
 
-**`peer_id` is deliberately empty.** It is a libp2p peer identity used for
-reputation bookkeeping, and an empty value short-circuits every such check. A
-non-empty identity the cluster's p2p service does not know is not merely
-cosmetic: on the block path an unrecognised or flagged peer causes catchup to be
-skipped and fetches to be refused. The bridge is not a libp2p peer, so it claims
-no identity.
+**`peer_id` must carry a synthetic identity** — a valid-format `12D3KooW…` id
+derived from a fresh key and registered with no p2p service (`-peer-id`). The
+cluster reads the field on two distinct gates: the **catchup** gate treats an
+unregistered id as unhealthy and diverts chain sync to real libp2p peers, while
+every **delivery** gate checks only bans and keeps pulling objects from the
+bridge — so the bridge serves objects without ever becoming a sync source.
+Empty is **unsafe**: catchup substitutes the announce URL for the missing id,
+targets the bridge's retrieval plane for the header chain, gets `404`s, and
+circuit-breaks the cluster out of recovery. Derivation and monitoring are in
+[configuration.md's Announcements section](configuration.md#announcements).
 
 A duplicate announcement is harmless — the cluster dedups by hash — so nothing
 here needs idempotent-producer or transactional semantics.
@@ -340,7 +345,10 @@ desynchronise the stream and cost every object behind it.
 
 **Submitter role.** Exactly one bridge per cluster should hold `-submitter` for
 a given class. A bridge with `-submitter=false` still runs its delivery lanes
-and retrieval plane; only the reverse path stays idle. Promotion is manual.
+and retrieval plane; only the reverse path stays idle. Promotion is manual by
+default; a standby given `-submitter-probe` (the primary's `/readyz` URL)
+promotes itself when the primary stays down and demotes when it returns — see
+[Health-gated failover](configuration.md#health-gated-failover--submitter-probe).
 
 ## Echo verification
 
@@ -432,14 +440,17 @@ cmd/teranode-bridge/     entrypoint: flags, wiring, per-class handlers, stats
 internal/lanes/          per-class TCP listeners over bare objfmt streams
 internal/submit/         tx.go       → propagation HTTP submit + outcome classes
                          uptunnel.go → one long-lived TCP conn per class, upward
+internal/txpipe/         batching tx submit pipeline → POST /txs
 internal/announce/       Kafka {hash, URL, peer_id} producer + wire codec
 internal/cache/          hash-keyed LRU with TTL and byte ceiling
 internal/registry/       TTL'd seen-set with direction (delivered / submitted)
 internal/retrieval/      the asset-API subset the cluster pulls from
 internal/tnasset/        the mirror: pulls objects back out of the cluster
+internal/reverse/        blockchain Subscribe → origin filter → publish upward
 internal/encode/         BRC-143 / BRC-144 push-frame builders (self-verifying)
 internal/tnwire/         BRC-144 ⇄ Teranode block serialization, both directions
 internal/hashid/         internal ⇄ display byte order, in exactly one place
+internal/metrics/        Prometheus collector over Stats() + echo counters
 proto/blockchain_api/    minimal wire-compatible blockchain Subscribe subset
 ```
 
@@ -450,10 +461,10 @@ a stats block every `-stats-every` (default 60 s, `0` disables):
 
 | Line              | Fields                                                                            |
 | ----------------- | --------------------------------------------------------------------------------- |
-| `lane stats`      | per lane: `conns`, `objects`, `bytes`, `errors`, `dropped`                        |
+| `lane stats`      | per lane: `conns`, `objects`, `bytes`, `errors`, `dropped`, `rejected`            |
 | `cache stats`     | `objects`, `object_bytes`, `txs`, `tx_bytes`, `evicted`                           |
 | `registry stats`  | `entries`, `duplicates`                                                           |
-| `submit stats`    | `accepted`, `duplicate`, `rejected`, `failed`                                     |
+| `submit stats`    | `accepted`, `rejected`, `failed`, `batches`, `retried`, `retry_ok`, `queue`, `seals_dep`, `seals_linger` |
 | `announce stats`  | `subtrees`, `blocks`, `failures`                                                  |
 | `retrieval stats` | `subtree`, `subtree_data`, `txs`, `block`, `miss`, `errors`                       |
 | `reverse stats`   | `subtrees_up`, `blocks_up`, `remote_skipped`, `skipped`, `failures`, `reconnects` |

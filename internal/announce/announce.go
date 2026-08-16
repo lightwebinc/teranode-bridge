@@ -35,7 +35,8 @@ type Message struct {
 // Encode returns the protobuf wire encoding. Fields are written in ascending
 // number order and empty strings are omitted, which is what proto3's canonical
 // encoder does — an explicitly-encoded empty field is legal but non-canonical,
-// and PeerID is normally empty (see Config.PeerID).
+// and a PeerID left empty against guidance is omitted entirely (see
+// Config.PeerID — real deployments must set a synthetic id).
 func (m Message) Encode() []byte {
 	var b []byte
 	if m.Hash != "" {

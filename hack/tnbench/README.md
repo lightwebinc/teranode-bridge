@@ -7,7 +7,10 @@ Two commands, run from this directory with `go run .`:
     go run . feed -addr 127.0.0.1:28833 -conns 24 -dur 30s [-chain]
 
 Start the real bridge between them (lanes on loopback, `-propagation` at the
-mock) and read rates off `btb_lane_objects_total{lane="tx"}` deltas.
+mock) and read rates off `btb_lane_objects_total{lane="tx"}` deltas. Check
+`btb_lane_objects_rejected_total{lane="tx"}` stays at zero first: the lane
+carries BRC-30 EF only, so a feed that emits standard-format transactions is
+refused on arrival and every rate read off it measures the reject path.
 
 ## The ladder — what each rung proves, and what it does not
 
@@ -22,11 +25,18 @@ The honest summary: rungs 1-3 bound and exercise **the bridge**; only a real
 cluster bounds **the system**, and its propagation service has its own batch
 worker pool that will bound it well below these numbers.
 
+Those three rates were measured with the earlier 70-byte standard-format
+template, before the tx lane became EF-only. The feed now emits 86-byte EF
+transactions — 23% more bytes per transaction, and a longer input walk — so
+treat the numbers as the shape of the ladder, not as figures to reproduce
+rung-for-rung until they are re-measured.
+
 ## Notes
 
-The crafted 70-byte transactions are codec-validated (`objfmt.TxSize` == 70). If
-the template changes, re-validate before trusting a run — a rig that emits
-subtly invalid transactions measures the error path, not the happy path.
+The crafted 86-byte transactions are BRC-30 extended format and codec-validated
+(`objfmt.IsEF`, `objfmt.TxSize` == 86). If the template changes, re-validate
+before trusting a run — a rig that emits subtly invalid transactions measures
+the error path, not the happy path.
 
 `-faithful` keeps a txid set, not a UTXO store: a real spend graph would make
 the mock the bottleneck long before the bridge.

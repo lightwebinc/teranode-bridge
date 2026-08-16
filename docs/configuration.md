@@ -184,7 +184,8 @@ Three contract details worth knowing:
   (`422` = missing parent, the only use of that status).
 - **Partial failure**: a batch answering `500 Failed to process transactions`
   had its other members processed; the failed txids are parsed from the error
-  lines and retried individually. Attribution reads only the txid the error
+  lines and retried together as one further batch (bounded by `-tx-inflight`).
+  Attribution reads only the txid the error
   convention _brackets_ — messages such as `duplicate input found: <hash>:<n>`
   quote a second hash that is not the subject, and counting it would book a
   phantom failure against a batch member that in fact succeeded. Any error line
@@ -424,7 +425,7 @@ they go in the container command (or a chart's `args`).
 ```bash
 docker run --rm \
   -p 8833:8833 -p 9143:9143 -p 9144:9144 -p 9145:9145 \
-  ghcr.io/lightwebinc/teranode-bridge:0.3.0 \
+  ghcr.io/lightwebinc/teranode-bridge:0.5.0 \
     -advertise   'http://[2001:db8:3f::1]:9145' \
     -propagation 'http://192.0.2.10:20833' \
     -kafka       '192.0.2.10:19092'
@@ -442,8 +443,9 @@ anomaly points at:
 | ----------------- | ------------------ | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `lane stats`      | `dropped`          | `0`              | Framing faults — a sender is writing malformed objects, or two classes are crossed on one lane                                     |
 |                   | `errors`           | `0`              | Per-object handler failures; the paired `submit`/`announce` line says which                                                        |
+|                   | `rejected`         | `0`              | Objects refused on lane format policy — on `tx`, a sender emitting BRC-12 standard transactions instead of BRC-30 EF               |
+| `registry stats`  | `duplicates`       | small            | Re-delivery of an object already handed over — expected after a failover or reconnect; sustained growth means the delivery side is re-sending |
 | `submit stats`    | `accepted`         | rising           | —                                                                                                                                  |
-|                   | `duplicate`        | small            | Expected after a failover or reconnect; sustained growth means the delivery side is re-sending                                     |
 |                   | `rejected`         | `0`              | The cluster refuses these on merits — missing parents, invalid, frozen. Not retryable                                              |
 |                   | `failed`           | `0`              | Propagation unreachable or erroring                                                                                                |
 | `announce stats`  | `failures`         | `0`              | Kafka unreachable, topic missing, or a mis-advertised broker listener                                                              |
