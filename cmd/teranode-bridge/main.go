@@ -330,7 +330,7 @@ func main() {
 	}
 	obs.Preset(started, laneNames, rev != nil)
 
-	rec.SetChecks(buildChecks(rec, laneSet, ret, producer, rev, propagation, *localAsset, sink))
+	rec.SetChecks(buildChecks(rec, laneSet, ret, producer, rev, propagation, *localAsset, sink, *clusterPoll > 0))
 
 	g, gctx := errgroup.WithContext(ctx)
 	for _, ln := range laneSet {
@@ -722,7 +722,7 @@ func submitterReady(laneSet []*lanes.Lane, started time.Time, grace time.Duratio
 // semantics for deployments that would rather fail closed.
 func buildChecks(rec *metrics.Recorder, laneSet []*lanes.Lane, ret *retrieval.Server,
 	producer *announce.Producer, rev *reverse.Subscriber, propagation []string,
-	assetBase string, sink bool) []health.Check {
+	assetBase string, sink, clusterPolled bool) []health.Check {
 
 	client := &http.Client{Timeout: 3 * time.Second}
 	checks := []health.Check{
@@ -772,8 +772,8 @@ func buildChecks(rec *metrics.Recorder, laneSet []*lanes.Lane, ret *retrieval.Se
 		})
 	}
 	if rev != nil {
-		checks = append(checks,
-			health.Check{
+		if clusterPolled {
+			checks = append(checks, health.Check{
 				Name: "BlockchainFSM",
 				Check: health.Skip(func(context.Context, bool) (int, string, error) {
 					state, height := rev.ClusterState()
@@ -789,7 +789,12 @@ func buildChecks(rec *metrics.Recorder, laneSet []*lanes.Lane, ret *retrieval.Se
 							fmt.Sprintf("cluster FSM %s", state), nil
 					}
 				}),
-			},
+			})
+		}
+		// Reported without the poll too: with -cluster-poll=0 there is no state
+		// to report, and a permanent "not yet read" would read as a fault
+		// rather than as a switched-off feature.
+		checks = append(checks,
 			health.Check{
 				Name: "SubmitterRole",
 				Check: func(context.Context, bool) (int, string, error) {

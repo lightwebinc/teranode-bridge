@@ -109,20 +109,20 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	p := s.cfg.APIPrefix
 
-	mux.HandleFunc("GET "+p+"/subtree/{hash}", s.timed("subtree", s.getSubtree))
-	mux.HandleFunc("GET "+p+"/subtree_data/{hash}", s.timed("subtree_data", s.getSubtreeData))
-	mux.HandleFunc("POST "+p+"/subtree/{hash}/txs", s.timed("txs", s.postSubtreeTxs))
-	mux.HandleFunc("GET "+p+"/block/{hash}", s.timed("block", s.getBlock))
+	mux.HandleFunc("GET "+p+"/subtree/{hash}", s.timed("subtree", true, s.getSubtree))
+	mux.HandleFunc("GET "+p+"/subtree_data/{hash}", s.timed("subtree_data", true, s.getSubtreeData))
+	mux.HandleFunc("POST "+p+"/subtree/{hash}/txs", s.timed("txs", true, s.postSubtreeTxs))
+	mux.HandleFunc("GET "+p+"/block/{hash}", s.timed("block", true, s.getBlock))
 
 	// One caller in the cluster appends the API prefix to an already-prefixed
 	// base URL, producing /api/v1/api/v1/subtree_data/{hash}. Serving the alias
 	// costs nothing and avoids a failure that would look like a missing object.
-	mux.HandleFunc("GET "+p+p+"/subtree_data/{hash}", s.timed("subtree_data", s.getSubtreeData))
+	mux.HandleFunc("GET "+p+p+"/subtree_data/{hash}", s.timed("subtree_data", true, s.getSubtreeData))
 
 	// Everything else — /blocks, /headers_from_common_ancestor, /tx — is a
 	// catchup or convenience route the bridge has no data for. 404 is the honest
 	// answer and keeps us out of the cluster's malicious-peer classification.
-	mux.HandleFunc("/", s.timed("unserved", s.notFound))
+	mux.HandleFunc("/", s.timed("unserved", false, s.notFound))
 
 	// Trace context arrives on the cluster's fetch, which happens INSIDE its
 	// block-validation span. Extracting it here is what keeps "why was this
@@ -135,16 +135,24 @@ func (s *Server) Handler() http.Handler {
 		}))
 }
 
-// timed wraps a handler with the route-latency histogram and the pull-freshness
-// stamp. The duration is measured to the point the handler returns, which for
-// the streaming routes is after the body has been written — that is the number
-// the cluster actually waits on.
-func (s *Server) timed(route string, h http.HandlerFunc) http.HandlerFunc {
+// timed wraps a handler with the route-latency histogram and, for the routes
+// this bridge actually serves, the pull-freshness stamp. The duration is
+// measured to the point the handler returns, which for the streaming routes is
+// after the body has been written — that is the number the cluster waits on.
+//
+// `served` is false on the catch-all. A chain-sync probe the bridge answers 404
+// is still worth timing, but it must NOT stamp last-pull: that gauge means "the
+// cluster is still fetching objects from us", and a cluster that had stopped
+// pulling while occasionally probing an unserved route would otherwise look
+// perfectly fresh.
+func (s *Server) timed(route string, served bool, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		defer func() {
 			obs.Since(obs.RetrievalDuration, start, route)
-			obs.Stamp(obs.LastPullTime)
+			if served {
+				obs.Stamp(obs.LastPullTime)
+			}
 		}()
 		h(w, r)
 	}

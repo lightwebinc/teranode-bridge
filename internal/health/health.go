@@ -217,7 +217,13 @@ func HTTPGet(client *http.Client, bases []string, path string) CheckFunc {
 		case reached == len(bases):
 			return http.StatusOK, fmt.Sprintf("all %d endpoints answering", reached), nil
 		case reached > 0:
-			return http.StatusOK, fmt.Sprintf("%d of %d endpoints answering", reached, len(bases)), lastErr
+			// Degraded but working, so the STATUS is the verdict and the error
+			// is folded into the message. Returning a non-nil error alongside a
+			// 200 would make CheckAll count this as a failure — which under
+			// -health-strict would fail readiness for a bridge that is
+			// delivering perfectly well through its remaining endpoints.
+			return http.StatusOK, fmt.Sprintf("%d of %d endpoints answering (%v)",
+				reached, len(bases), lastErr), nil
 		default:
 			return http.StatusServiceUnavailable, "no endpoint answering", lastErr
 		}

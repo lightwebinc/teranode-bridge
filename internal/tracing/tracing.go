@@ -41,7 +41,6 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -100,11 +99,16 @@ func Init(ctx context.Context, cfg Config, log *slog.Logger) (func(context.Conte
 		return nil, fmt.Errorf("tracing: otlp exporter: %w", err)
 	}
 
+	// The identity triple only — the same three attributes logging.Init and the
+	// metrics package attach, so a trace joins a log line and a series on
+	// shared dimensions. Teranode also carries a `commit` attribute from a
+	// separate build variable; the bridge has no such variable (its Version is
+	// a `git describe`), and stamping the version under a `commit` key would be
+	// a wrong answer rather than a missing one.
 	res, err := resource.New(ctx, resource.WithAttributes(
 		semconv.ServiceNameKey.String(cfg.ServiceName),
 		semconv.ServiceVersionKey.String(cfg.Version),
 		semconv.ServiceInstanceIDKey.String(cfg.Instance),
-		attribute.String("commit", cfg.Version),
 	))
 	if err != nil {
 		return nil, fmt.Errorf("tracing: resource: %w", err)

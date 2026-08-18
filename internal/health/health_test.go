@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -161,5 +162,34 @@ func TestHTTPGetPartialReach(t *testing.T) {
 		context.Background(), false)
 	if status != http.StatusServiceUnavailable {
 		t.Fatalf("no endpoint reachable reported healthy: %d", status)
+	}
+}
+
+// TestPartialReachIsNotAFailureUnderStrict pins the interaction between
+// HTTPGet's degraded-but-working verdict and CheckAll's failure rule. CheckAll
+// treats a non-nil error as a failure regardless of status, so returning both a
+// 200 and an error would fail readiness under -health-strict for a bridge that
+// is delivering perfectly well through its remaining endpoints.
+func TestPartialReachIsNotAFailureUnderStrict(t *testing.T) {
+	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer live.Close()
+
+	status, body := CheckAll(context.Background(), false, true, []Check{
+		{Name: "Propagation", Check: HTTPGet(live.Client(), []string{live.URL, "http://127.0.0.1:1"}, "/health")},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("partial reach failed readiness under strict: %d\n%s", status, body)
+	}
+
+	var rep Report
+	if err := json.Unmarshal(body, &rep); err != nil {
+		t.Fatalf("body: %v", err)
+	}
+	// The detail must survive: degraded-but-working still has to name the
+	// endpoint that is down.
+	if !strings.Contains(rep.Dependencies[0].Message, "1 of 2") {
+		t.Errorf("degraded detail lost from the message: %q", rep.Dependencies[0].Message)
 	}
 }
