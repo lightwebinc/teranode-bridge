@@ -87,4 +87,4 @@ catchup diverts, delivery unaffected. If registration semantics ever widen
 be offered as catchup sources cluster-wide. **Ask**: keep announce-derived ids
 out of the registry, or provide an explicit "object-source only" marker on the
 announcement. We monitor for drift regardless
-(`btb_retrieval_unserved_route_total{class="chain_sync"}`).
+(`teranode_bridge_retrieval_unserved_route_total{class="chain_sync"}`).

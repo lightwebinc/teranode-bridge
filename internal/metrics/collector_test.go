@@ -19,7 +19,7 @@ import (
 // missing or misspelled tx metric surfaces before an operator finds an empty
 // panel.
 func TestGatherWithSourcesAttached(t *testing.T) {
-	r := New("test", "unit")
+	r := New(Options{Version: "test", Instance: "unit", LegacyPrefix: true})
 
 	p, err := txpipe.New(txpipe.Config{Endpoints: []string{"http://127.0.0.1:1"}},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -39,17 +39,62 @@ func TestGatherWithSourcesAttached(t *testing.T) {
 		got[mf.GetName()] = true
 	}
 	for _, want := range []string{
-		"btb_submit_total",
-		"btb_txpipe_batches_total",
-		"btb_txpipe_batch_seals_total",
-		"btb_txpipe_retried_total",
-		"btb_txpipe_retry_accepted_total",
-		"btb_txpipe_unattributed_total",
-		"btb_txpipe_rate_limited_total",
-		"btb_txpipe_queue_depth",
+		"teranode_bridge_submit_total",
+		"teranode_bridge_txpipe_batches_total",
+		"teranode_bridge_txpipe_batch_seals_total",
+		"teranode_bridge_txpipe_retried_total",
+		"teranode_bridge_txpipe_retry_accepted_total",
+		"teranode_bridge_txpipe_unattributed_total",
+		"teranode_bridge_txpipe_rate_limited_total",
+		"teranode_bridge_txpipe_queue_depth",
+		"teranode_bridge_txpipe_enqueued_total",
+		"teranode_bridge_build_info",
 	} {
 		if !got[want] {
 			t.Errorf("missing metric family %s", want)
+		}
+	}
+
+	// The legacy alias must still be present while the dual-emit release is
+	// current: that promise is the only reason existing dashboards survive the
+	// rename, so it is worth a test rather than a comment.
+	for _, want := range []string{
+		"btb_submit_total",
+		"btb_txpipe_batches_total",
+		"btb_txpipe_queue_depth",
+	} {
+		if !got[want] {
+			t.Errorf("missing legacy alias %s", want)
+		}
+	}
+
+	// A metric introduced with the new naming has no dashboard to keep working
+	// and must NOT gain an alias, or the old prefix never dies.
+	if got["btb_txpipe_enqueued_total"] {
+		t.Error("new-only metric was aliased under the legacy prefix")
+	}
+}
+
+// TestLegacyPrefixOff pins that turning the alias off removes it entirely —
+// the switch has to actually complete the migration, not just reorder output.
+func TestLegacyPrefixOff(t *testing.T) {
+	r := New(Options{Version: "test", Instance: "unit", LegacyPrefix: false})
+	t.Cleanup(func() { legacyOn.Store(true) })
+
+	p, err := txpipe.New(txpipe.Config{Endpoints: []string{"http://127.0.0.1:1"}},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("txpipe: %v", err)
+	}
+	r.SetSources(Sources{Tx: p})
+
+	mfs, err := r.reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if strings.HasPrefix(mf.GetName(), "btb_") {
+			t.Errorf("legacy series %s emitted with LegacyPrefix=false", mf.GetName())
 		}
 	}
 }
@@ -64,7 +109,7 @@ func TestGatherWithSourcesAttached(t *testing.T) {
 // heard about is exempt from that check. Every tx-pipe metric was undescribed
 // when this test was written.
 func TestDescribeCoversCollect(t *testing.T) {
-	r := New("test", "unit")
+	r := New(Options{Version: "test", Instance: "unit", LegacyPrefix: true})
 	p, err := txpipe.New(txpipe.Config{Endpoints: []string{"http://127.0.0.1:1"}},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {

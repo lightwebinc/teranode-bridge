@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/lightwebinc/teranode-bridge/internal/obs"
 )
 
 // UpTunnel submits push frames from this cluster back into the fabric, through
@@ -36,6 +38,11 @@ func (u *UpTunnel) Send(ctx context.Context, obj []byte) error {
 	if len(obj) == 0 {
 		return errors.New("uptunnel: empty object")
 	}
+	// Timed from the caller's point of view, so the lock wait is included: with
+	// one connection per class the writes serialise, and time spent queued
+	// behind another object is time the reverse path is actually blocked.
+	defer obs.Timer(obs.UpTunnelWriteDuration, u.Class)()
+
 	u.mu.Lock()
 	defer u.mu.Unlock()
 

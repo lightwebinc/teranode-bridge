@@ -26,12 +26,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	grpcprom "github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/lightwebinc/teranode-bridge/proto/blockchain_api"
 
 	"github.com/lightwebinc/teranode-bridge/internal/hashid"
+	"github.com/lightwebinc/teranode-bridge/internal/obs"
 	"github.com/lightwebinc/teranode-bridge/internal/registry"
 	"github.com/lightwebinc/teranode-bridge/internal/tnwire"
 )
@@ -98,10 +101,23 @@ type Config struct {
 	// registry. Subtrees carry no coinbase and need no equivalent: their
 	// notification has exactly one producer, local block assembly.
 	MineTag []byte
+
+	// GRPCMetrics, when set, instruments the blockchain connection with the
+	// standard gRPC client metrics — the same provider Teranode uses.
+	GRPCMetrics *grpcprom.ClientMetrics
+
+	// ClusterPoll is how often to read the cluster's FSM state and tip height
+	// over the blockchain connection. Zero disables the poll.
+	ClusterPoll time.Duration
 }
 
 // Subscriber watches the cluster and republishes what it produces.
 type Subscriber struct {
+	// fsmState and height hold the last cluster state read by
+	// RunClusterState, for the health endpoint and the stats line.
+	fsmState atomic.Pointer[string]
+	height   atomic.Uint64
+
 	cfg   Config
 	seen  *registry.Registry
 	build Builder
@@ -134,7 +150,23 @@ func New(cfg Config, seen *registry.Registry, build Builder, log *slog.Logger) (
 	if cfg.Source == "" {
 		cfg.Source = "teranode-bridge"
 	}
-	conn, err := grpc.NewClient(cfg.BlockchainAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	opts := []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		// Teranode gives every gRPC client an OTel stats handler and a
+		// Prometheus client interceptor (teranode/util/grpc_helper.go
+		// GetGRPCClient). A bare connection here left the reverse path with no
+		// visibility beyond a reconnect counter, and broke trace continuity on
+		// the one call the cluster makes into its own blockchain service on our
+		// behalf.
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	}
+	if cfg.GRPCMetrics != nil {
+		opts = append(opts,
+			grpc.WithChainUnaryInterceptor(cfg.GRPCMetrics.UnaryClientInterceptor()),
+			grpc.WithChainStreamInterceptor(cfg.GRPCMetrics.StreamClientInterceptor()),
+		)
+	}
+	conn, err := grpc.NewClient(cfg.BlockchainAddr, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("reverse: dial %s: %w", cfg.BlockchainAddr, err)
 	}
@@ -179,6 +211,12 @@ func (s *Subscriber) Run(ctx context.Context) error {
 				s.reconnects.Add(1)
 				break
 			}
+			// Stamped for EVERY notification type, not just the two we act on.
+			// The cluster sends PINGs, so this gauge keeps ticking on an idle
+			// chain — which is what makes "the subscription is dead" separable
+			// from "the chain is quiet". Acting only on subtree and block
+			// notifications would have made a silent stream look like calm.
+			obs.Stamp(obs.LastNotificationTime)
 			s.handle(ctx, n)
 		}
 		if !sleep(ctx, backoff) {

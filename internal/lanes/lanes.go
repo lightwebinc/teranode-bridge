@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/lightwebinc/shard-common/objfmt"
+
+	"github.com/lightwebinc/teranode-bridge/internal/obs"
 )
 
 // Handler consumes one whole object from a lane. Returning an error is logged
@@ -44,6 +46,14 @@ type Lane struct {
 	Log    *slog.Logger
 
 	MaxObject int // 0 = codec default
+
+	// SizeHistogram enables the per-object size distribution on this lane.
+	// Off by default on the tx lane: the lane bytes counter already gives the
+	// mean, and at megatransaction-per-second rates a twelve-bucket observation
+	// per object is real work on the read path for a shape that rarely changes.
+	// On the subtree and block lanes the rate is orders of magnitude lower and
+	// the distribution is genuinely informative, so it is on.
+	SizeHistogram bool
 
 	listener net.Listener
 	bound    atomic.Bool
@@ -219,6 +229,10 @@ func (l *Lane) serveConn(ctx context.Context, conn net.Conn) {
 		onConn++
 		l.counts.Objects.Add(1)
 		l.counts.Bytes.Add(uint64(len(obj)))
+		obs.Stamp(obs.LastObjectTime, l.Name)
+		if l.SizeHistogram {
+			obs.ObjectBytes.WithLabelValues(l.Name).Observe(float64(len(obj)))
+		}
 
 		if err := l.Handle(ctx, obj); err != nil {
 			if errors.Is(err, ErrReject) {

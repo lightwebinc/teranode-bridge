@@ -55,7 +55,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/lightwebinc/teranode-bridge/internal/hashid"
+	"github.com/lightwebinc/teranode-bridge/internal/obs"
 )
 
 // Config sizes the pipe. Zero values pick defaults suited to a single
@@ -199,13 +202,19 @@ func New(cfg Config, log *slog.Logger) (*Pipe, error) {
 	tr.MaxConnsPerHost = cfg.Inflight + 8
 	tr.IdleConnTimeout = 90 * time.Second
 
+	// Propagation extracts trace context from request headers. Without the
+	// otelhttp round-tripper every transaction the bridge forwards begins a NEW
+	// root span cluster-side, so the wide-area leg that carried it is missing
+	// from the trace. With tracing disabled this wraps a no-op provider.
+	rt := otelhttp.NewTransport(tr)
+
 	ins := make([]chan job, cfg.Builders)
 	for i := range ins {
 		ins[i] = make(chan job, cfg.Queue/cfg.Builders+1)
 	}
 	return &Pipe{
 		cfg:    cfg,
-		client: &http.Client{Timeout: cfg.Timeout, Transport: tr},
+		client: &http.Client{Timeout: cfg.Timeout, Transport: rt},
 		log:    log,
 		ins:    ins,
 		sem:    make(chan struct{}, cfg.Inflight),
@@ -596,18 +605,41 @@ func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 	}
 }
 
+// post issues one batch submission and times it.
+//
+// The histogram is labelled by how the round trip ended, because "slow" and
+// "refusing" are different faults with the same counter signature: an endpoint
+// that 429s in a millisecond and one that accepts in two seconds both move
+// btb_txpipe_batches_total at the same rate. Timing is measured around the
+// whole exchange including the body read, since that is what the caller waits
+// on and what holds an in-flight slot.
 func (p *Pipe) post(ctx context.Context, url string, body []byte) (int, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return 0, "", err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
+
+	start := time.Now()
 	resp, err := p.client.Do(req)
 	if err != nil {
+		obs.Since(obs.SubmitDuration, start, "failed")
 		return 0, "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+
+	outcome := "failed"
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		outcome = "ok"
+		obs.Stamp(obs.LastSubmitTime)
+	case resp.StatusCode == http.StatusTooManyRequests:
+		outcome = "rate_limited"
+	case resp.StatusCode >= 400 && resp.StatusCode < 500:
+		outcome = "rejected"
+	}
+	obs.Since(obs.SubmitDuration, start, outcome)
 	return resp.StatusCode, string(rb), nil
 }
 

@@ -174,7 +174,7 @@ Extended format is preserved rather than re-encoded, which is what makes the
 path work at all: the cluster requires EF, and EF is what reaches the validator,
 prevout data intact. A BRC-12 standard transaction still *parses* — the lane
 codec delimits it either way — so the lane gates on the EF marker explicitly and
-refuses it on arrival (`btb_lane_objects_rejected_total{lane="tx"}`). Deferring
+refuses it on arrival (`teranode_bridge_lane_objects_rejected_total{lane="tx"}`). Deferring
 that to the cluster would be worse than late: the transaction would first take a
 cache slot and a registry entry, and that registry entry would then suppress the
 EF copy of the same transaction as a duplicate, since both serializations share
@@ -477,33 +477,96 @@ otherwise block shutdown indefinitely.
 
 ### Endpoints
 
-`-metrics-addr` (default `[::]:9146`) serves the same four routes as every other
-service in the stack:
+`-metrics-addr` (default `[::]:9146`) serves the observability surface. The
+health routes, their body shape and the `?timeout=` override match Teranode's
+own (`teranode/daemon/daemon.go`, `teranode/util/health`), so cluster-side
+tooling reads a bridge exactly as it reads a Teranode service.
 
-| Route            | Answer                                                                                                      |
-| ---------------- | ----------------------------------------------------------------------------------------------------------- |
-| `GET /metrics`   | Prometheus exposition, `btb_` prefix, plus `go_*`/`process_*`                                               |
-| `GET /healthz`   | always `200` — the process is alive                                                                         |
-| `GET /readyz`    | `200` once **every lane is bound**; `503` before that, because until then the bridge cannot accept delivery |
-| `POST /loglevel` | runtime log level change (also `SIGHUP`, which toggles debug)                                               |
+| Route                   | Answer                                                                                                      |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `GET /metrics`          | Prometheus exposition, `teranode_bridge_` prefix, plus `go_*`/`process_*`/`grpc_client_*`                    |
+| `GET /health`           | JSON dependency report                                                                                       |
+| `GET /health/readiness` | as `/health`; probes dependencies                                                                            |
+| `GET /health/liveness`  | process liveness only — dependencies are **not** probed, so a sick dependency never restarts a healthy process |
+| `GET /healthz`          | always `200` — the process is alive                                                                          |
+| `GET /readyz`           | `200` once **every lane is bound**; `503` before that, because until then the bridge cannot accept delivery |
+| `POST /loglevel`        | runtime log level change (also `SIGHUP`, which toggles debug)                                                |
+| `/debug/pprof/…`        | `index`, `cmdline`, `profile`, `symbol`, `trace`, named runtime profiles                                     |
 
-The metrics are read from the same `Stats()` snapshots the log lines use — the
-collector pulls them at scrape time rather than incrementing a second set of
-counters, so the two can never disagree. A nil subsystem contributes no series,
-which is why a sink exposes lane and cache metrics and nothing else.
+Counter and gauge metrics are read from the same `Stats()` snapshots the log
+lines use — the collector pulls them at scrape time rather than incrementing a
+second set of counters, so the two can never disagree. A nil subsystem
+contributes no series, which is why a sink exposes lane and cache metrics and
+nothing else.
 
-Two counters have no other home and are owned by the metrics package:
-`btb_echo_verified_total` and `btb_echo_mismatch_total`.
-**`btb_echo_mismatch_total` is the alert that matters** — non-zero means the
-object plane altered bytes in flight.
+That shape cannot express a distribution, so latency, size and freshness are
+observed at the call sites instead (`internal/obs`), using Teranode's bucket sets
+verbatim so a bridge histogram and a cluster histogram can share a panel.
 
-This binary registers directly on the Prometheus registry rather than routing
-cold-path counters through the OTel SDK as the rest of the stack does. The
-bridge has no per-packet path, so the SDK's cost was never the deciding factor,
-and a directly registered counter is **present at zero** — which is what lets
-`btb_echo_mismatch_total == 0` be a meaningful alert rather than an expression
-that silently matches nothing on a freshly restarted process. The trade is no
-OTLP push; scrape it.
+Two counters have no other home: `teranode_bridge_echo_verified_total` and
+`teranode_bridge_echo_mismatch_total`.
+**`teranode_bridge_echo_mismatch_total` is the alert that matters** — non-zero
+means the object plane altered bytes in flight.
+
+This binary registers counters directly on the Prometheus registry rather than
+routing cold-path counters through the OTel SDK as the rest of the stack does.
+The bridge has no per-packet path, so the SDK's cost was never the deciding
+factor, and a directly registered counter is **present at zero** — which is what
+lets `teranode_bridge_echo_mismatch_total == 0` be a meaningful alert rather than
+an expression that silently matches nothing on a freshly restarted process. The
+same reasoning presets the freshness gauges and the closed-label histograms at
+zero. The trade is no OTLP push for metrics; scrape it. Tracing is a separate
+matter and does use the OTel SDK.
+
+### Why `/readyz` is not the health summary
+
+`/readyz` answers one narrow question — is every delivery lane bound on **this**
+process — and deliberately says nothing about Kafka, propagation or the cluster.
+That is a failover contract, not an oversight: a standby bridge polls the
+primary's `/readyz` to decide whether to promote itself, so a shared-dependency
+blip visible to both bridges must not read as "the primary died". Two submitters
+is a worse outcome than a late one.
+
+`/health/readiness` carries the full picture, and separates dependencies that
+gate readiness from those that are merely reported. Only conditions this process
+alone can be in — its lanes, its retrieval listener — gate; a shared outage
+cannot take every bridge out of the retrieval Service at once. That is a
+deliberate deviation from Teranode's all-or-nothing `CheckAll`, because the
+retrieval plane serves from a local cache: a bridge with dead Kafka still answers
+every pull for objects it has already announced, and failing readiness would
+strand exactly those fetches. `-health-strict` restores upstream semantics.
+
+### Tracing
+
+The bridge sits on three boundaries Teranode already traces: outbound HTTP to
+propagation, outbound gRPC to blockchain, and **inbound HTTP on the retrieval
+plane**. The last is the one that matters most — the cluster's fetch happens
+inside its block-validation span, so without extraction here "why was this block
+slow to validate" dead-ends at the bridge.
+
+Tracing is off by default, matching upstream, and the flags carry upstream's
+names and defaults. Even when off the W3C propagator is installed, so incoming
+trace context is parsed and forwarded rather than dropped: a disabled bridge
+declines to contribute to a trace, it does not break one.
+
+Announcements ride Kafka, where Teranode does not propagate trace context either
+(its `util/tracing/PROPAGATION.md` lists this as a known gap). The bridge does
+not invent a scheme of its own; when upstream adds a `trace_context` field, the
+bridge must carry it too or become the only remaining hole.
+
+### Cluster state
+
+The reverse path's blockchain connection is also polled for the cluster's FSM
+state and tip height (`-cluster-poll`). This is read-only and advisory — the
+bridge announces and submits identically whatever state the cluster is in,
+because the cluster is unmodified and decides for itself. It exists because the
+most common degraded case otherwise has no visible cause from the bridge's own
+metrics: announcements succeed, pulls never follow, and every bridge counter
+looks healthy. Teranode's own services treat FSM state as a health dependency
+(`services/blockchain/fsm.go`, `CheckFSM`); the bridge reports it the same way.
+
+The full metric catalogue is in
+[docs/references/prometheusMetrics.md](references/prometheusMetrics.md).
 
 ## Resource footprint
 

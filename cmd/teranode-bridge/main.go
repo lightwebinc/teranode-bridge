@@ -35,14 +35,17 @@ import (
 	"github.com/lightwebinc/teranode-bridge/internal/announce"
 	"github.com/lightwebinc/teranode-bridge/internal/cache"
 	"github.com/lightwebinc/teranode-bridge/internal/hashid"
+	"github.com/lightwebinc/teranode-bridge/internal/health"
 	"github.com/lightwebinc/teranode-bridge/internal/lanes"
 	"github.com/lightwebinc/teranode-bridge/internal/metrics"
+	"github.com/lightwebinc/teranode-bridge/internal/obs"
 	"github.com/lightwebinc/teranode-bridge/internal/registry"
 	"github.com/lightwebinc/teranode-bridge/internal/retrieval"
 	"github.com/lightwebinc/teranode-bridge/internal/reverse"
 	"github.com/lightwebinc/teranode-bridge/internal/submit"
 	"github.com/lightwebinc/teranode-bridge/internal/tnasset"
 	"github.com/lightwebinc/teranode-bridge/internal/tnwire"
+	"github.com/lightwebinc/teranode-bridge/internal/tracing"
 	"github.com/lightwebinc/teranode-bridge/internal/txpipe"
 )
 
@@ -105,11 +108,20 @@ func main() {
 		txBuilders   = flag.Int("tx-builders", 4, "parallel batch builders (power of two, max 16)")
 		txRetries    = flag.Int("tx-retries", 3, "per-tx retries for failures that resolve with time (missing parent); 0 = off")
 
-		metricsAddr = flag.String("metrics-addr", "[::]:9146", "HTTP listener for /metrics, /healthz, /readyz, /loglevel (empty = off)")
-		logLevel    = flag.String("log-level", "info", "debug|info|warn|error")
-		logFormat   = flag.String("log-format", "text", "log encoding: text (stderr) or json (stdout, the fleet aggregation contract)")
-		debug       = flag.Bool("debug", false, "deprecated alias for -log-level=debug")
-		instanceID  = flag.String("instance-id", "", "service.instance.id for logs and metrics (default: hostname)")
+		metricsAddr    = flag.String("metrics-addr", "[::]:9146", "HTTP listener for /metrics, /health*, /healthz, /readyz, /loglevel, /debug/pprof (empty = off)")
+		legacyPrefix   = flag.Bool("metrics-legacy-prefix", true, "also emit every pre-existing series under the old btb_ name alongside teranode_bridge_. On for one release so dashboards survive the cutover; set false once they are migrated")
+		healthStrict   = flag.Bool("health-strict", false, "fail /health/readiness when ANY dependency is down, which is Teranode's all-or-nothing CheckAll behaviour. Off by default: the retrieval plane serves from a local cache, so a bridge with unreachable Kafka can still answer every pull for what it has already announced, and failing readiness would strand exactly those fetches")
+		txSizeHist     = flag.Bool("tx-size-histogram", false, "observe a per-object size histogram on the TX lane. Off by default: the lane bytes counter already gives the mean, and at megatransaction-per-second rates a bucketed observation per object is real work on the read path")
+		clusterPoll    = flag.Duration("cluster-poll", 15*time.Second, "how often to read the cluster's FSM state and tip height over the blockchain connection (0 = off; requires -blockchain)")
+		blockProfile   = flag.Int("block-profile-rate", 0, "runtime.SetBlockProfileRate; 0 leaves /debug/pprof/block returning an EMPTY profile rather than an error")
+		mutexProfile   = flag.Int("mutex-profile-fraction", 0, "runtime.SetMutexProfileFraction; 0 leaves /debug/pprof/mutex returning an EMPTY profile rather than an error")
+		traceEnabled   = flag.Bool("tracing-enabled", false, "export OpenTelemetry traces. Off by default, as upstream. Even when off the W3C propagator is installed, so incoming trace context is parsed and forwarded rather than dropped")
+		traceCollector = flag.String("tracing-collector-url", "http://localhost:4318", "OTLP HTTP collector, matching Teranode's tracing_collector_url")
+		traceSample    = flag.Float64("tracing-sample-rate", 0.01, "head sampling ratio for root spans, matching Teranode's tracing_SampleRate. Child spans inherit the parent decision (ParentBased), so a sampled cluster trace stays sampled across the bridge")
+		logLevel       = flag.String("log-level", "info", "debug|info|warn|error")
+		logFormat      = flag.String("log-format", "text", "log encoding: text (stderr) or json (stdout, the fleet aggregation contract)")
+		debug          = flag.Bool("debug", false, "deprecated alias for -log-level=debug")
+		instanceID     = flag.String("instance-id", "", "service.instance.id for logs and metrics (default: hostname)")
 	)
 	flag.Var(&propagation, "propagation", "propagation HTTP base URL(s), comma-separated, e.g. http://192.0.2.10:20833")
 	flag.Var(&brokers, "kafka", "cluster Kafka broker(s), comma-separated, e.g. 192.0.2.10:19092")
@@ -130,6 +142,22 @@ func main() {
 	stopSIGHUP := logging.InstallSIGHUPToggle(levelVar, level)
 	defer stopSIGHUP()
 
+	ctxTrace, stopTrace := context.WithCancel(context.Background())
+	defer stopTrace()
+	shutdownTracing, err := tracing.Init(ctxTrace, tracing.Config{
+		Enabled:      *traceEnabled,
+		CollectorURL: *traceCollector,
+		SampleRate:   *traceSample,
+		ServiceName:  metrics.ServiceName,
+		Version:      Version,
+		Instance:     *instanceID,
+	}, log)
+	if err != nil {
+		log.Error("tracing", "err", err)
+		os.Exit(1)
+	}
+	defer func() { _ = shutdownTracing(context.Background()) }()
+
 	sink := *mode == "sink"
 
 	if !sink {
@@ -141,6 +169,19 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	rec := metrics.New(metrics.Options{
+		Version:      Version,
+		Instance:     *instanceID,
+		LegacyPrefix: *legacyPrefix,
+		Strict:       *healthStrict,
+	})
+	metrics.ProfileRates(*blockProfile, *mutexProfile, log)
+
+	// firstPull is the announce→pull stopwatch. It has to exist before either
+	// side is built, because the announce side starts it and the retrieval side
+	// stops it, and neither owns it.
+	firstPull := obs.NewFirstPull(1<<16, *cacheTTL)
 
 	objects := cache.New(cache.Options{MaxBytes: *cacheBytes, TTL: *cacheTTL})
 	// The tx cache is generational, not LRU: at megatransaction-per-second
@@ -154,7 +195,6 @@ func main() {
 		producer *announce.Producer
 		ret      *retrieval.Server
 		baseURL  string
-		err      error
 	)
 
 	if !sink {
@@ -185,10 +225,12 @@ func main() {
 			os.Exit(1)
 		}
 		defer producer.Close()
+		producer.SetFirstPull(firstPull)
 		if err := producer.Ping(ctx); err != nil {
 			log.Warn("kafka ping failed at startup", "err", err)
 		}
 		ret = retrieval.New(retrieval.Config{Listen: *retrievalListen, APIPrefix: *apiPrefix}, objects, objects, txs, log)
+		ret.SetFirstPull(firstPull)
 		baseURL = ret.BaseURL(*advertise)
 		log.Info("bridge starting", "version", Version, "mode", *mode, "announce-url", baseURL,
 			"propagation", propagation.String(), "kafka", brokers.String())
@@ -197,24 +239,25 @@ func main() {
 			"version", Version)
 	}
 
-	rec := metrics.New(Version, *instanceID)
-
 	started := time.Now()
 	laneSet := []*lanes.Lane{
 		{
 			Name: "tx", Class: objfmt.ClassTx, Addr: *txListen, Log: log, MaxObject: *maxObject,
+			SizeHistogram: *txSizeHist,
 			Handle: func(ctx context.Context, obj []byte) error {
 				return handleTx(ctx, obj, txs, seen, pipe)
 			},
 		},
 		{
 			Name: "subtree", Class: objfmt.ClassSubtree, Addr: *subtreeListen, Log: log, MaxObject: *maxObject,
+			SizeHistogram: true,
 			Handle: func(ctx context.Context, obj []byte) error {
 				return handleSubtree(ctx, obj, objects, seen, producer, baseURL, rec, log)
 			},
 		},
 		{
 			Name: "block", Class: objfmt.ClassBlock, Addr: *blockListen, Log: log, MaxObject: *maxObject,
+			SizeHistogram: true,
 			Handle: func(ctx context.Context, obj []byte) error {
 				return handleBlock(ctx, obj, objects, seen, producer, baseURL, rec, log)
 			},
@@ -245,6 +288,8 @@ func main() {
 			Published:      cacheStore{objects},
 			MineTag:        []byte(*mineTag),
 			Ready:          submitterReady(laneSet, started, *submitGrace, *submitBlind, log),
+			GRPCMetrics:    rec.GRPCClientMetrics,
+			ClusterPoll:    *clusterPoll,
 		}, seen, builderFunc{asset}, log)
 		if err != nil {
 			log.Error("reverse path", "err", err)
@@ -274,6 +319,19 @@ func main() {
 	rec.SetLevelVar(levelVar)
 	log.Info("host.inventory", "inventory", inv)
 
+	// Freshness gauges must exist from the first scrape: `time() - metric > N`
+	// matches nothing when the series is absent, so a bridge that never
+	// received a single object would look healthy to the very alert written to
+	// catch it. Seeded with the start time, so the value is an age from boot
+	// rather than an age from the epoch.
+	laneNames := make([]string, 0, len(laneSet))
+	for _, l := range laneSet {
+		laneNames = append(laneNames, l.Name)
+	}
+	obs.Preset(started, laneNames, rev != nil)
+
+	rec.SetChecks(buildChecks(rec, laneSet, ret, producer, rev, propagation, *localAsset, sink))
+
 	g, gctx := errgroup.WithContext(ctx)
 	for _, ln := range laneSet {
 		g.Go(func() error { return ln.Serve(gctx) })
@@ -286,6 +344,12 @@ func main() {
 	}
 	if rev != nil {
 		g.Go(func() error { return rev.Run(gctx) })
+		if *clusterPoll > 0 {
+			g.Go(func() error {
+				rev.RunClusterState(gctx, *clusterPoll, log)
+				return nil
+			})
+		}
 		if *submitProbe != "" && !*submitter {
 			g.Go(func() error {
 				rev.RunPromoter(gctx, reverse.PromoterConfig{ProbeURL: *submitProbe}, log)
@@ -482,7 +546,8 @@ func logStats(log *slog.Logger, laneSet []*lanes.Lane, objects *cache.Cache, txs
 	}
 	if producer != nil {
 		a := producer.Stats()
-		log.Info("announce stats", "subtrees", a.Subtrees, "blocks", a.Blocks, "failures", a.Failures)
+		log.Info("announce stats", "subtrees", a.Subtrees, "blocks", a.Blocks,
+			"failures", a.Failures, "buffered", a.Buffered, "awaiting_pull", a.AwaitingPull)
 	}
 	if ret != nil {
 		r := ret.Stats()
@@ -494,6 +559,9 @@ func logStats(log *slog.Logger, laneSet []*lanes.Lane, objects *cache.Cache, txs
 		log.Info("reverse stats", "subtrees_up", v.SubtreesUp, "blocks_up", v.BlocksUp,
 			"remote_skipped", v.RemoteSkipped, "skipped", v.Skipped,
 			"failures", v.Failures, "reconnects", v.Reconnects)
+		if state, height := rev.ClusterState(); state != "" {
+			log.Info("cluster stats", "fsm_state", state, "height", height)
+		}
 	}
 	for _, u := range []*submit.UpTunnel{upSubtree, upBlock} {
 		if u == nil {
@@ -626,4 +694,115 @@ func submitterReady(laneSet []*lanes.Lane, started time.Time, grace time.Duratio
 		}
 		return true
 	}
+}
+
+// buildChecks assembles the dependency list the /health routes report.
+//
+// # Gating vs advisory
+//
+// A check marked Gating fails readiness; the rest are reported but do not.
+// The split is not squeamishness, it is what the bridge can still do when a
+// dependency is down:
+//
+//   - lanes and the retrieval plane GATE. Without a bound lane the bridge
+//     cannot accept delivery at all, and without the retrieval plane an
+//     announcement it has already sent points at a socket that will not answer
+//     — the cluster does not retry a failed subtree fetch, so that object is
+//     simply lost. Both are conditions only this process can be in, which is
+//     also what makes them safe to gate on: a shared outage cannot take every
+//     bridge out of rotation at once.
+//   - Kafka, propagation, the asset service and the cluster's FSM are ADVISORY.
+//     Each is shared by every bridge in front of the cluster, so gating on them
+//     would remove all of them from the retrieval Service simultaneously — and
+//     a bridge with dead Kafka still holds a cache full of objects the cluster
+//     has already been told about and is about to ask for. Reporting the fault
+//     while continuing to serve is strictly better than going dark.
+//
+// -health-strict collapses the distinction, restoring Teranode's CheckAll
+// semantics for deployments that would rather fail closed.
+func buildChecks(rec *metrics.Recorder, laneSet []*lanes.Lane, ret *retrieval.Server,
+	producer *announce.Producer, rev *reverse.Subscriber, propagation []string,
+	assetBase string, sink bool) []health.Check {
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	checks := []health.Check{
+		{Name: "process", Check: health.Alive()},
+		{
+			Name:   "DeliveryLanes",
+			Gating: true,
+			Check: health.Bool(rec.Ready,
+				fmt.Sprintf("all %d delivery lanes bound", len(laneSet)),
+				"not every delivery lane is bound"),
+		},
+	}
+
+	if sink {
+		return checks
+	}
+
+	if ret != nil {
+		checks = append(checks, health.Check{
+			Name:   "RetrievalPlane",
+			Gating: true,
+			Check: health.Bool(ret.Listening,
+				"retrieval plane listening",
+				"retrieval plane not listening; announced objects would 404"),
+		})
+	}
+	if producer != nil {
+		checks = append(checks, health.Check{
+			Name:  "Kafka",
+			Check: health.Ping("kafka", producer.Ping),
+		})
+	}
+	if len(propagation) > 0 {
+		checks = append(checks, health.Check{
+			Name:  "Propagation",
+			Check: health.HTTPGet(client, propagation, "/health"),
+		})
+	}
+	if assetBase != "" {
+		// The asset service has no /health of its own on the API prefix; the
+		// best cheap liveness signal is that it answers at all. A 404 from a
+		// live service is a reachability success, which is why HTTPGet's
+		// non-2xx path reports the status rather than a transport error.
+		checks = append(checks, health.Check{
+			Name:  "AssetService",
+			Check: health.HTTPGet(client, []string{assetBase}, "/health"),
+		})
+	}
+	if rev != nil {
+		checks = append(checks,
+			health.Check{
+				Name: "BlockchainFSM",
+				Check: health.Skip(func(context.Context, bool) (int, string, error) {
+					state, height := rev.ClusterState()
+					switch state {
+					case "":
+						return http.StatusServiceUnavailable, "cluster state not yet read", nil
+					case "RUNNING", "IDLE", "CATCHINGBLOCKS":
+						// The same three states Teranode's CheckFSM accepts.
+						return http.StatusOK,
+							fmt.Sprintf("cluster FSM %s at height %d", state, height), nil
+					default:
+						return http.StatusServiceUnavailable,
+							fmt.Sprintf("cluster FSM %s", state), nil
+					}
+				}),
+			},
+			health.Check{
+				Name: "SubmitterRole",
+				Check: func(context.Context, bool) (int, string, error) {
+					if rev.Active() {
+						return http.StatusOK, "holds the submitter role", nil
+					}
+					// A standby is healthy. Reporting the role at all is what
+					// makes "no bridge is publishing" diagnosable from either
+					// bridge rather than only from the metric that sums them.
+					return http.StatusOK, "standby (not publishing)", nil
+				},
+			},
+		)
+	}
+	return checks
 }

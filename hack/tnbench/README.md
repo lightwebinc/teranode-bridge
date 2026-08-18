@@ -7,8 +7,8 @@ Two commands, run from this directory with `go run .`:
     go run . feed -addr 127.0.0.1:28833 -conns 24 -dur 30s [-chain]
 
 Start the real bridge between them (lanes on loopback, `-propagation` at the
-mock) and read rates off `btb_lane_objects_total{lane="tx"}` deltas. Check
-`btb_lane_objects_rejected_total{lane="tx"}` stays at zero first: the lane
+mock) and read rates off `teranode_bridge_lane_objects_total{lane="tx"}` deltas. Check
+`teranode_bridge_lane_objects_rejected_total{lane="tx"}` stays at zero first: the lane
 carries BRC-30 EF only, so a feed that emits standard-format transactions is
 refused on arrival and every rate read off it measures the reject path.
 

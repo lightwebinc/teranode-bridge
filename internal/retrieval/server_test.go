@@ -14,6 +14,8 @@ import (
 
 	"github.com/lightwebinc/teranode-bridge/internal/cache"
 	"github.com/lightwebinc/teranode-bridge/internal/hashid"
+	"github.com/lightwebinc/teranode-bridge/internal/obs"
+	"time"
 )
 
 // The rules under test are the two that keep the cluster healthy:
@@ -244,5 +246,55 @@ func TestNotFoundClassifiesChainSyncRoutes(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/frobnicate", nil))
 	if st := s.Stats(); st.UnservedChainSync != 2 || st.UnservedRoute != 3 {
 		t.Fatalf("after non-chain route: chain=%d route=%d, want 2/3", st.UnservedChainSync, st.UnservedRoute)
+	}
+}
+
+// TestFirstPullClosesTheLoop pins the bridge's own end-to-end SLI end to end:
+// the announce side starts the stopwatch, a real pull through the real route
+// table stops it, and only the FIRST pull counts.
+//
+// This is the one measurement neither the fabric nor the cluster makes — the
+// cluster does not know when it was told, and the fabric does not know when the
+// cluster acted — so if the wiring between the two halves breaks, nothing else
+// fails to notice.
+func TestFirstPullClosesTheLoop(t *testing.T) {
+	s, objects, _, h := testServer(t)
+	f := obs.NewFirstPull(16, time.Minute)
+	s.SetFirstPull(f)
+
+	root := [32]byte{9}
+	frame := make([]byte, objfmt.SubtreeHeaderSize+32)
+	copy(frame, root[:])
+	objects.Put(cache.Key(root), "subtree", frame)
+
+	hash := hashid.Hash(root)
+	f.Announced(hash.Display(), "subtree")
+	if f.Len() != 1 {
+		t.Fatalf("announcement not tracked: %d", f.Len())
+	}
+
+	for i := range 2 {
+		resp, err := h.Client().Get(h.URL + "/api/v1/subtree/" + hash.Display())
+		if err != nil {
+			t.Fatalf("pull %d: %v", i, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("pull %d: status %d", i, resp.StatusCode)
+		}
+	}
+
+	if f.Len() != 0 {
+		t.Fatalf("pull did not close the announce loop: %d still awaiting", f.Len())
+	}
+}
+
+// TestListeningGatesReadiness pins the predicate the health endpoint gates on.
+// It must be false before Serve binds: an announcement already sent points at
+// this socket, and Teranode does not retry a failed subtree fetch.
+func TestListeningGatesReadiness(t *testing.T) {
+	s, _, _, _ := testServer(t)
+	if s.Listening() {
+		t.Fatal("reports listening before Serve bound a socket")
 	}
 }

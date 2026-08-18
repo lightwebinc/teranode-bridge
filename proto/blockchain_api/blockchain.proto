@@ -13,9 +13,17 @@ syntax = "proto3";
 //   * Notification.metadata (field 4) is omitted. Unknown fields are skipped by
 //     any conformant parser, so leaving it out costs nothing and keeps this file
 //     free of a nested map type we never read.
+//   * Empty stands in for google.protobuf.Empty. An empty message serialises to
+//     zero bytes whatever its declared type, so this is byte-identical on the
+//     wire and drops the well-known-types import.
+//   * GetBlockHeaderResponse declares only `height` (field 3). The other
+//     fourteen fields are skipped as unknown, which is exactly what we want:
+//     the bridge reads the cluster's height, not its headers.
 //
 // Upstream: teranode/services/blockchain/blockchain_api/blockchain_api.proto
-// @ 1cca625 (rpc Subscribe :125, SubscribeRequest :496, Notification :501).
+// @ 1cca625 (rpc Subscribe :125, SubscribeRequest :496, Notification :501;
+// rpc GetFSMCurrentState :172, GetFSMStateResponse :646, FSMStateType :922;
+// rpc GetBestBlockHeader :103, GetBlockHeaderResponse height :3).
 // Regenerate with: buf generate  (see buf.gen.yaml)
 package blockchain_api;
 
@@ -24,6 +32,38 @@ option go_package = "github.com/lightwebinc/teranode-bridge/proto/blockchain_api
 service BlockchainAPI {
   // Subscribe streams notifications as the node accepts subtrees and blocks.
   rpc Subscribe(SubscribeRequest) returns (stream Notification) {}
+
+  // GetFSMCurrentState reports whether the cluster is RUNNING, IDLE or catching
+  // up. The bridge announces and submits identically in every state, so without
+  // this reading "the announce succeeded but nothing happened" has no visible
+  // cause. Teranode's own services treat this as a health dependency
+  // (services/blockchain/fsm.go CheckFSM).
+  rpc GetFSMCurrentState(Empty) returns (GetFSMStateResponse) {}
+
+  // GetBestBlockHeader gives the cluster's tip height, which is what turns a
+  // flat announce counter into "the cluster is behind" or "the cluster is fine".
+  rpc GetBestBlockHeader(Empty) returns (GetBlockHeaderResponse) {}
+}
+
+// Empty is wire-identical to google.protobuf.Empty.
+message Empty {}
+
+// FSMStateType mirrors the upstream enum, including its reserved slot, so a
+// value the cluster sends is never silently reinterpreted.
+enum FSMStateType {
+  IDLE = 0;
+  RUNNING = 1;
+  CATCHINGBLOCKS = 2;
+  reserved 3;
+  reserved "LEGACYSYNCING";
+}
+
+message GetFSMStateResponse {
+  FSMStateType state = 1;
+}
+
+message GetBlockHeaderResponse {
+  uint32 height = 3;
 }
 
 message SubscribeRequest {

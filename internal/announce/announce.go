@@ -22,6 +22,8 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"google.golang.org/protobuf/encoding/protowire"
+
+	"github.com/lightwebinc/teranode-bridge/internal/obs"
 )
 
 // Message is the common shape of KafkaSubtreeTopicMessage and
@@ -117,6 +119,11 @@ type Producer struct {
 	client *kgo.Client
 	log    *slog.Logger
 
+	// firstPull, when set, is told the moment each announcement is acked so
+	// the retrieval plane can close the loop and observe how long the cluster
+	// took to act on it.
+	firstPull *obs.FirstPull
+
 	subtrees, blocks, failures atomic.Uint64
 }
 
@@ -131,6 +138,13 @@ func New(cfg Config, log *slog.Logger) (*Producer, error) {
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(cfg.Brokers...),
 		kgo.ClientID("teranode-bridge"),
+		// Produce-path instrumentation, hook-for-hook with the cluster's own
+		// (teranode/util/kafka/producer_hooks.go). Without it an announce
+		// BACKLOG is invisible: the failure counter only moves once produce
+		// actually fails, while a producer merely falling behind reports
+		// nothing — and an object the cluster is never told about is as lost
+		// as one that failed to send.
+		kgo.WithHooks(obs.NewKafkaHook()),
 		// The consumers are ordinary Kafka consumers; nothing here needs
 		// transactions or idempotent producer semantics — a duplicate announce
 		// is harmless because the cluster dedups by hash.
@@ -151,9 +165,14 @@ func (p *Producer) Ping(ctx context.Context) error {
 	return p.client.Ping(ctx)
 }
 
+// SetFirstPull attaches the announce→first-pull tracker. Optional: without it
+// the announcement is still produced and counted, only the end-to-end SLI goes
+// unobserved.
+func (p *Producer) SetFirstPull(f *obs.FirstPull) { p.firstPull = f }
+
 // Subtree announces a subtree, telling the cluster to fetch it from baseURL.
 func (p *Producer) Subtree(ctx context.Context, hash, baseURL string) error {
-	err := p.produce(ctx, p.cfg.SubtreeTopic, Message{Hash: hash, URL: baseURL, PeerID: p.cfg.PeerID})
+	err := p.produce(ctx, p.cfg.SubtreeTopic, "subtree", Message{Hash: hash, URL: baseURL, PeerID: p.cfg.PeerID})
 	if err != nil {
 		p.failures.Add(1)
 		return err
@@ -164,7 +183,7 @@ func (p *Producer) Subtree(ctx context.Context, hash, baseURL string) error {
 
 // Block announces a block, telling the cluster to fetch it from baseURL.
 func (p *Producer) Block(ctx context.Context, hash, baseURL string) error {
-	err := p.produce(ctx, p.cfg.BlockTopic, Message{Hash: hash, URL: baseURL, PeerID: p.cfg.PeerID})
+	err := p.produce(ctx, p.cfg.BlockTopic, "block", Message{Hash: hash, URL: baseURL, PeerID: p.cfg.PeerID})
 	if err != nil {
 		p.failures.Add(1)
 		return err
@@ -173,27 +192,47 @@ func (p *Producer) Block(ctx context.Context, hash, baseURL string) error {
 	return nil
 }
 
-func (p *Producer) produce(ctx context.Context, topic string, m Message) error {
+func (p *Producer) produce(ctx context.Context, topic, class string, m Message) error {
 	if topic == "" {
 		return errors.New("announce: empty topic")
 	}
 	ctx, cancel := context.WithTimeout(ctx, p.cfg.Timeout)
 	defer cancel()
 
+	start := time.Now()
 	rec := &kgo.Record{Topic: topic, Value: m.Encode()}
 	if err := p.client.ProduceSync(ctx, rec).FirstErr(); err != nil {
 		return fmt.Errorf("announce: produce to %s: %w", topic, err)
 	}
+	// Timed around ProduceSync, so this is the ack latency the cluster's Kafka
+	// actually imposes — not the client-side enqueue.
+	obs.Since(obs.AnnounceDuration, start, class)
+	obs.Stamp(obs.LastAnnounceTime, class)
+	p.firstPull.Announced(m.Hash, class)
 	p.log.Debug("announced", "topic", topic, "hash", m.Hash, "url", m.URL)
 	return nil
 }
 
 // Stats is a snapshot for logging and metrics.
-type Stats struct{ Subtrees, Blocks, Failures uint64 }
+type Stats struct {
+	Subtrees, Blocks, Failures uint64
+	// Buffered is what the client still holds unproduced. It is read at scrape
+	// time rather than pushed from a hook because franz-go exposes it as a
+	// level, not an event.
+	Buffered int64
+	// AwaitingPull is how many announcements have not yet been fetched by the
+	// cluster. A number that keeps climbing means announcements are landing but
+	// pulls are not following.
+	AwaitingPull int
+}
 
 // Stats returns a snapshot of the announcement counters.
 func (p *Producer) Stats() Stats {
-	return Stats{Subtrees: p.subtrees.Load(), Blocks: p.blocks.Load(), Failures: p.failures.Load()}
+	return Stats{
+		Subtrees: p.subtrees.Load(), Blocks: p.blocks.Load(), Failures: p.failures.Load(),
+		Buffered:     p.client.BufferedProduceRecords(),
+		AwaitingPull: p.firstPull.Len(),
+	}
 }
 
 // Close shuts the Kafka client down, flushing any in-flight produce.

@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             (unknown)
-// source: blockchain.proto
+// source: proto/blockchain_api/blockchain.proto
 
 // Package blockchain_api is a MINIMAL, wire-compatible subset of Teranode's
 // blockchain service — just enough to subscribe to its notification stream.
@@ -17,9 +17,17 @@
 //   * Notification.metadata (field 4) is omitted. Unknown fields are skipped by
 //     any conformant parser, so leaving it out costs nothing and keeps this file
 //     free of a nested map type we never read.
+//   * Empty stands in for google.protobuf.Empty. An empty message serialises to
+//     zero bytes whatever its declared type, so this is byte-identical on the
+//     wire and drops the well-known-types import.
+//   * GetBlockHeaderResponse declares only `height` (field 3). The other
+//     fourteen fields are skipped as unknown, which is exactly what we want:
+//     the bridge reads the cluster's height, not its headers.
 //
 // Upstream: teranode/services/blockchain/blockchain_api/blockchain_api.proto
-// @ 1cca625 (rpc Subscribe :125, SubscribeRequest :496, Notification :501).
+// @ 1cca625 (rpc Subscribe :125, SubscribeRequest :496, Notification :501;
+// rpc GetFSMCurrentState :172, GetFSMStateResponse :646, FSMStateType :922;
+// rpc GetBestBlockHeader :103, GetBlockHeaderResponse height :3).
 // Regenerate with: buf generate  (see buf.gen.yaml)
 
 package blockchain_api
@@ -37,7 +45,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	BlockchainAPI_Subscribe_FullMethodName = "/blockchain_api.BlockchainAPI/Subscribe"
+	BlockchainAPI_Subscribe_FullMethodName          = "/blockchain_api.BlockchainAPI/Subscribe"
+	BlockchainAPI_GetFSMCurrentState_FullMethodName = "/blockchain_api.BlockchainAPI/GetFSMCurrentState"
+	BlockchainAPI_GetBestBlockHeader_FullMethodName = "/blockchain_api.BlockchainAPI/GetBestBlockHeader"
 )
 
 // BlockchainAPIClient is the client API for BlockchainAPI service.
@@ -46,6 +56,15 @@ const (
 type BlockchainAPIClient interface {
 	// Subscribe streams notifications as the node accepts subtrees and blocks.
 	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Notification], error)
+	// GetFSMCurrentState reports whether the cluster is RUNNING, IDLE or catching
+	// up. The bridge announces and submits identically in every state, so without
+	// this reading "the announce succeeded but nothing happened" has no visible
+	// cause. Teranode's own services treat this as a health dependency
+	// (services/blockchain/fsm.go CheckFSM).
+	GetFSMCurrentState(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
+	// GetBestBlockHeader gives the cluster's tip height, which is what turns a
+	// flat announce counter into "the cluster is behind" or "the cluster is fine".
+	GetBestBlockHeader(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
 }
 
 type blockchainAPIClient struct {
@@ -75,12 +94,41 @@ func (c *blockchainAPIClient) Subscribe(ctx context.Context, in *SubscribeReques
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type BlockchainAPI_SubscribeClient = grpc.ServerStreamingClient[Notification]
 
+func (c *blockchainAPIClient) GetFSMCurrentState(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetFSMStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetFSMStateResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetFSMCurrentState_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetBestBlockHeader(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBlockHeaderResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetBestBlockHeader_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockchainAPIServer is the server API for BlockchainAPI service.
 // All implementations must embed UnimplementedBlockchainAPIServer
 // for forward compatibility.
 type BlockchainAPIServer interface {
 	// Subscribe streams notifications as the node accepts subtrees and blocks.
 	Subscribe(*SubscribeRequest, grpc.ServerStreamingServer[Notification]) error
+	// GetFSMCurrentState reports whether the cluster is RUNNING, IDLE or catching
+	// up. The bridge announces and submits identically in every state, so without
+	// this reading "the announce succeeded but nothing happened" has no visible
+	// cause. Teranode's own services treat this as a health dependency
+	// (services/blockchain/fsm.go CheckFSM).
+	GetFSMCurrentState(context.Context, *Empty) (*GetFSMStateResponse, error)
+	// GetBestBlockHeader gives the cluster's tip height, which is what turns a
+	// flat announce counter into "the cluster is behind" or "the cluster is fine".
+	GetBestBlockHeader(context.Context, *Empty) (*GetBlockHeaderResponse, error)
 	mustEmbedUnimplementedBlockchainAPIServer()
 }
 
@@ -93,6 +141,12 @@ type UnimplementedBlockchainAPIServer struct{}
 
 func (UnimplementedBlockchainAPIServer) Subscribe(*SubscribeRequest, grpc.ServerStreamingServer[Notification]) error {
 	return status.Error(codes.Unimplemented, "method Subscribe not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetFSMCurrentState(context.Context, *Empty) (*GetFSMStateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetFSMCurrentState not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetBestBlockHeader(context.Context, *Empty) (*GetBlockHeaderResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetBestBlockHeader not implemented")
 }
 func (UnimplementedBlockchainAPIServer) mustEmbedUnimplementedBlockchainAPIServer() {}
 func (UnimplementedBlockchainAPIServer) testEmbeddedByValue()                       {}
@@ -126,13 +180,58 @@ func _BlockchainAPI_Subscribe_Handler(srv interface{}, stream grpc.ServerStream)
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type BlockchainAPI_SubscribeServer = grpc.ServerStreamingServer[Notification]
 
+func _BlockchainAPI_GetFSMCurrentState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetFSMCurrentState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetFSMCurrentState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetFSMCurrentState(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetBestBlockHeader_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetBestBlockHeader(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetBestBlockHeader_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetBestBlockHeader(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockchainAPI_ServiceDesc is the grpc.ServiceDesc for BlockchainAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "blockchain_api.BlockchainAPI",
 	HandlerType: (*BlockchainAPIServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetFSMCurrentState",
+			Handler:    _BlockchainAPI_GetFSMCurrentState_Handler,
+		},
+		{
+			MethodName: "GetBestBlockHeader",
+			Handler:    _BlockchainAPI_GetBestBlockHeader_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "Subscribe",
@@ -140,5 +239,5 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "blockchain.proto",
+	Metadata: "proto/blockchain_api/blockchain.proto",
 }

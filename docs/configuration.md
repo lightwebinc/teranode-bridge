@@ -21,7 +21,7 @@ their own structure.
 
 | Flag              | Default     | Description                                                                                                                                                |
 | ----------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-tx-listen`      | `[::]:8833` | Transaction lane (BRC-30 extended format only — a BRC-12 standard transaction is refused at the lane and counted in `btb_lane_objects_rejected_total{lane="tx"}`, never submitted). |
+| `-tx-listen`      | `[::]:8833` | Transaction lane (BRC-30 extended format only — a BRC-12 standard transaction is refused at the lane and counted in `teranode_bridge_lane_objects_rejected_total{lane="tx"}`, never submitted). |
 | `-subtree-listen` | `[::]:9143` | Subtree lane (BRC-143 push frames).                                                                                                                        |
 | `-block-listen`   | `[::]:9144` | Block lane (BRC-144 push frames).                                                                                                                          |
 | `-max-object`     | `0`         | Per-object size ceiling in bytes. `0` uses the `objfmt` codec default of 64 MiB. Applies to every lane.                                                    |
@@ -101,7 +101,7 @@ and only shows up as a growing gap between `announce stats` and
 > base58btc. Give every bridge instance its own id.
 >
 > The invariant is monitored, not assumed:
-> `btb_retrieval_unserved_route_total{class="chain_sync"}` counts the cluster
+> `teranode_bridge_retrieval_unserved_route_total{class="chain_sync"}` counts the cluster
 > asking the bridge for chain-sync routes. Rare bursts accompany multi-peer
 > degradation (upstream's cached-alternatives walk skips the divert gate); a
 > sustained rate means the divert has regressed — alarm on it.
@@ -128,7 +128,7 @@ unauthenticated**. Keep it on a trusted LAN.
 
 With `-submitter=false` the subscriber still connects and still runs its origin
 filter (so `remote_skipped` keeps counting), but it publishes nothing — held
-publishes count in `btb_reverse_skipped_total{reason="standby"}`. That makes a
+publishes count in `teranode_bridge_reverse_skipped_total{reason="standby"}`. That makes a
 standby bridge a hot spare.
 
 ### Health-gated failover (`-submitter-probe`)
@@ -138,7 +138,7 @@ standby bridge a hot spare.
 | `-submitter-probe` | `""`    | The PRIMARY bridge's `/readyz` URL. Set on a **standby** (`-submitter=false`); ignored with a warning on a configured primary. |
 
 The standby probes the primary every 2 s. Five consecutive failures **promote**
-it (it starts publishing, `btb_submitter_active` flips to 1, log line
+it (it starts publishing, `teranode_bridge_submitter_active` flips to 1, log line
 `PROMOTED to submitter`); ten consecutive successes demote it again. Demotion is
 deliberately slower than promotion so a flapping primary cannot flap the role,
 and the failure envelope is benign in both directions: a dead primary costs ~10
@@ -190,13 +190,13 @@ Three contract details worth knowing:
   quote a second hash that is not the subject, and counting it would book a
   phantom failure against a batch member that in fact succeeded. Any error line
   naming no member of the batch it answers is counted in
-  `btb_txpipe_unattributed_total` and excluded from `accepted`, because that
+  `teranode_bridge_txpipe_unattributed_total` and excluded from `accepted`, because that
   batch's outcome is partly unknown rather than good.
 - **Rate limiting**: propagation's HTTP limiter is per source IP **and** per
   endpoint. A `429` means nothing in the batch was processed, so the pipe
   retries the batch _whole_ (never splitting it into per-member requests, which
   would multiply the request rate by the batch size against the limiter that
-  just refused it) and counts `btb_txpipe_rate_limited_total`. A sustained
+  just refused it) and counts `teranode_bridge_txpipe_rate_limited_total`. A sustained
   non-zero rate means one bridge is saturating one endpoint — add endpoints or
   raise the server's limit; batch size will not help.
 
@@ -211,7 +211,7 @@ libp2p **before** the fabric delivered it looks unseen — without a check, the
 reverse path republishes a remote block upward with false attribution. When
 `-mine-tag` is set, only blocks whose in-band coinbase carries the tag are
 published; foreign blocks count in
-`btb_reverse_skipped_total{reason="foreign_origin"}`. The check is stateless
+`teranode_bridge_reverse_skipped_total{reason="foreign_origin"}`. The check is stateless
 (derived from block content), so it also survives bridge restarts, which wipe
 the seen-registry.
 
@@ -250,10 +250,10 @@ configurable.
 | --------------- | ----------- | -------------------------------------------------------------------------------------------------------- |
 | `-mode`         | `all`       | `all` = full bridge. `sink` = receive, parse, verify and count only, with no cluster targets.            |
 | `-stats-every`  | `1m`        | Interval between stats blocks. `0` disables periodic stats (a final block is still emitted at shutdown). |
-| `-metrics-addr` | `[::]:9146` | HTTP listener for `/metrics`, `/healthz`, `/readyz`, `/loglevel`. Empty disables it.                     |
+| `-metrics-addr` | `[::]:9146` | HTTP listener for `/metrics`, `/health*`, `/healthz`, `/readyz`, `/loglevel`, `/debug/pprof`. Empty disables it. |
 | `-log-level`    | `info`      | `debug` \| `info` \| `warn` \| `error`. Runtime-changeable via `POST /loglevel` and `SIGHUP`.            |
 | `-log-format`   | `text`      | `text` (stderr) or `json` (stdout — the fleet aggregation contract).                                     |
-| `-instance-id`  | hostname    | `service.instance.id` shared by logs and metrics, so the two join.                                       |
+| `-instance-id`  | hostname    | `service.instance.id` shared by logs, metrics and traces, so all three join.                             |
 | `-debug`        | `false`     | Deprecated alias for `-log-level=debug`.                                                                 |
 
 > **Why `text` is the default here** and `json` elsewhere in the stack: the
@@ -262,18 +262,123 @@ configurable.
 
 ### Observability endpoints
 
-| Route            | Answer                                       |
-| ---------------- | -------------------------------------------- |
-| `GET /metrics`   | Prometheus exposition, `btb_` prefix         |
-| `GET /healthz`   | always `200`                                 |
-| `GET /readyz`    | `200` once every lane is bound, `503` before |
-| `POST /loglevel` | runtime log-level change                     |
+| Route                   | Answer                                                             |
+| ----------------------- | ------------------------------------------------------------------ |
+| `GET /metrics`          | Prometheus exposition, `teranode_bridge_` prefix                   |
+| `GET /health`           | JSON dependency report, same body shape as Teranode                |
+| `GET /health/readiness` | as `/health`; probes dependencies                                  |
+| `GET /health/liveness`  | process liveness only — dependencies are **not** probed            |
+| `GET /healthz`          | always `200`                                                       |
+| `GET /readyz`           | `200` once every lane is bound, `503` before                       |
+| `POST /loglevel`        | runtime log-level change                                           |
+| `/debug/pprof/…`        | `index`, `cmdline`, `profile`, `symbol`, `trace`, named profiles   |
 
-Metrics are read from the same counters the stats lines report, so the two never
-disagree. The one to alert on is **`btb_echo_mismatch_total`** — non-zero means
-the object plane returned different bytes than were published. Series are
+The health routes accept `?timeout=<duration>` to override the 5s probe
+deadline, as Teranode's do.
+
+Counter and gauge series are read from the same counters the stats lines report,
+so the two never disagree. Latency, size and freshness are observed at the call
+sites instead, because a distribution cannot be reconstructed from a snapshot.
+
+The full catalogue, with the alert expressions worth running, is in
+[docs/references/prometheusMetrics.md](references/prometheusMetrics.md).
+
+#### `/readyz` is the failover contract, not a health summary
+
+`/readyz` answers one narrow question: is every delivery lane bound on **this**
+process. It deliberately says nothing about Kafka, propagation or the cluster,
+because a standby bridge polls the primary's `/readyz` to decide whether to
+promote itself (`-submitter-probe`). Folding shared-dependency health into that
+signal would let a Kafka blip promote a standby while the primary is still
+publishing — and two submitters is a worse outcome than a late one.
+
+Use `/health/readiness` for the full picture.
+
+#### Gating vs advisory dependencies
+
+Teranode's `CheckAll` fails the aggregate if any dependency fails. The bridge
+reports every dependency but only lets some of them fail readiness:
+
+| Dependency | Gates readiness | Why |
+| --- | --- | --- |
+| `DeliveryLanes` | yes | Without a bound lane the bridge cannot accept delivery at all. |
+| `RetrievalPlane` | yes | An announcement already sent points at this socket, and Teranode does **not** retry a failed subtree fetch — so a bridge that announced and then cannot answer has lost that object, not delayed it. |
+| `Kafka` | no | The retrieval plane serves from a local cache. A bridge with dead Kafka still answers every pull for what it already announced. |
+| `Propagation` | no | Shared by every bridge; healthy if **one** endpoint answers, since the tx pipeline round-robins. |
+| `AssetService` | no | Reverse path only. |
+| `BlockchainFSM` | no | Reports `RUNNING`/`IDLE`/`CATCHINGBLOCKS` — the same three states Teranode's own `CheckFSM` accepts — plus the tip height. |
+| `SubmitterRole` | no | A standby is healthy; the role is reported so "no bridge is publishing" is diagnosable from either one. |
+
+The gating checks are all conditions *only this process* can be in, which is what
+makes them safe: a shared outage cannot take every bridge out of rotation at
+once. `-health-strict` collapses the distinction and restores Teranode's
+all-or-nothing behaviour for deployments that would rather fail closed.
+
+### Metric naming and the legacy prefix
+
+Series are `teranode_bridge_*`, produced by the `Namespace`/`Subsystem` pair that
+names every Teranode metric. The bridge previously used a `btb_` prefix of its
+own, which is off the Teranode grid — a dashboard or recording rule keyed on
+`teranode_` skipped the bridge entirely.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-metrics-legacy-prefix` | `true` | Also emit every pre-existing series under `btb_`. Set `false` once dashboards are migrated; scheduled for removal in the release after next. |
+
+Metrics introduced with the new naming are **not** aliased.
+
+The one to alert on remains **`teranode_bridge_echo_mismatch_total`** — non-zero
+means the object plane returned different bytes than were published. Series are
 present at zero from startup, so `== 0` is a valid alert expression immediately
-after a restart.
+after a restart. The freshness gauges are present too, seeded with the process
+start time — which is what makes
+`time() - teranode_bridge_last_object_timestamp_seconds > 900` fire on a bridge
+that has never received anything, 15 minutes after boot, rather than matching
+nothing at all or firing immediately.
+
+### Latency, size and freshness
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-tx-size-histogram` | `false` | Observe a per-object size histogram on the **tx** lane. Off by default: the lane bytes counter already gives the mean, and at megatransaction-per-second rates a bucketed observation per object is real work on the read path. The `subtree` and `block` lanes always observe it — their rate is orders of magnitude lower and the distribution is genuinely informative. |
+| `-cluster-poll` | `15s` | How often to read the cluster's FSM state and tip height over the blockchain connection. `0` disables; requires `-blockchain`. Advisory only — the bridge announces and submits identically whatever state the cluster is in. |
+
+Histograms use Teranode's bucket sets verbatim, so a bridge series and a cluster
+series bucket identically and can share a panel and a quantile.
+
+### Tracing
+
+Off by default, as upstream. Even when off the W3C propagator is installed, so
+incoming trace context is parsed and forwarded rather than dropped.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-tracing-enabled` | `false` | Export OpenTelemetry traces over OTLP/HTTP. |
+| `-tracing-collector-url` | `http://localhost:4318` | Collector endpoint, matching Teranode's `tracing_collector_url`. An `http` scheme selects the insecure exporter. |
+| `-tracing-sample-rate` | `0.01` | Head sampling ratio for root spans, matching Teranode's `tracing_SampleRate`. Child spans inherit the parent decision, so a sampled cluster trace stays sampled across the bridge. |
+
+Instrumented boundaries: outbound HTTP to propagation and the asset service,
+outbound gRPC to blockchain, and **inbound HTTP on the retrieval plane** — the
+last is what keeps "why was this block slow to validate" from dead-ending at the
+bridge, because the cluster's fetch happens inside its block-validation span.
+
+Announcements ride Kafka, where Teranode does not propagate trace context either;
+the bridge does not invent a scheme of its own. See
+[docs/references/prometheusMetrics.md](references/prometheusMetrics.md#tracing).
+
+### Profiling
+
+pprof rides the metrics listener, the same arrangement Teranode uses for its
+profiler mux.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-block-profile-rate` | `0` | `runtime.SetBlockProfileRate`. While `0`, `/debug/pprof/block` returns an **empty** profile rather than an error — which reads as "no contention" during exactly the investigation that needs the opposite answer. |
+| `-mutex-profile-fraction` | `0` | `runtime.SetMutexProfileFraction`, same caveat for `/debug/pprof/mutex`. |
+
+Both are off by default because neither is free. The chart's NetworkPolicy admits
+`metricsIngressFrom` to the whole metrics port, pprof included — scope it to the
+scrape source rather than to the cluster CIDR.
 
 `-mode sink` skips the propagation submitter, the Kafka producer, the retrieval
 plane and the reverse path. Lanes still run, still enforce framing, and still
@@ -449,6 +554,8 @@ anomaly points at:
 |                   | `rejected`         | `0`              | The cluster refuses these on merits — missing parents, invalid, frozen. Not retryable                                              |
 |                   | `failed`           | `0`              | Propagation unreachable or erroring                                                                                                |
 | `announce stats`  | `failures`         | `0`              | Kafka unreachable, topic missing, or a mis-advertised broker listener                                                              |
+|                   | `buffered`         | `0`              | Records the Kafka client still holds unproduced. A sustained non-zero level is a **backlog**, not a failure — the cluster has not been told about those objects yet, and no failure counter reports it |
+|                   | `awaiting_pull`    | small            | Announcements acked but not yet pulled. Climbing means announcements land and pulls do not follow                                  |
 | `retrieval stats` | `subtree`, `block` | tracks announces | A flat count against a rising `announce` means the cluster is not pulling — check `-advertise`, `-api-prefix`, and the topic names |
 |                   | `miss`             | `0`              | Cache evicted before the pull (raise `-cache-bytes`/`-cache-ttl`), or a `subtree_data` member transaction was never delivered      |
 |                   | `errors`           | `0`              | A genuine bridge-side fault; each one is logged with the object hash                                                               |
@@ -456,6 +563,8 @@ anomaly points at:
 |                   | `skipped`          | occasional       | Object not fully available yet (asset returned `404`)                                                                              |
 |                   | `failures`         | `0`              | Asset fetch, encode, or upward submit failed                                                                                       |
 |                   | `reconnects`       | occasional       | Routine: the cluster rolls its gRPC connections                                                                                    |
+| `cluster stats`   | `fsm_state`        | `RUNNING`        | `CATCHINGBLOCKS` or `IDLE` explains announcements that succeed while nothing is pulled. Absent until the first `-cluster-poll` read |
+|                   | `height`           | rising           | The cluster's tip. Flat while blocks are being announced means the cluster is not accepting them                                   |
 | `up-tunnel stats` | `redials`          | low              | One per dial; a rising count tracks `failures` and means the ingress is flapping                                                   |
 
 Two log lines deserve alerts of their own:
@@ -463,6 +572,12 @@ Two log lines deserve alerts of their own:
 - `ECHO MISMATCH` (error) — the object plane returned different bytes than were
   published. This is a data-integrity fault, not a delivery hiccup.
 - `lane framing error, dropping connection` (error) — see `dropped` above.
+
+The stats block reports levels and totals; it cannot report a distribution or a
+silence. Latency percentiles and the freshness gauges — the ones that catch a
+lane that simply stopped, which every counter above renders as an unchanging
+number — are metrics only. See
+[docs/references/prometheusMetrics.md](references/prometheusMetrics.md#freshness).
 
 ## Not yet configurable
 

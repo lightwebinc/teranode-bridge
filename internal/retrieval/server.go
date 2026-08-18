@@ -28,9 +28,11 @@ import (
 	"time"
 
 	"github.com/lightwebinc/shard-common/objfmt"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/lightwebinc/teranode-bridge/internal/cache"
 	"github.com/lightwebinc/teranode-bridge/internal/hashid"
+	"github.com/lightwebinc/teranode-bridge/internal/obs"
 	"github.com/lightwebinc/teranode-bridge/internal/tnwire"
 )
 
@@ -64,7 +66,13 @@ type Server struct {
 	txs      TxStore
 	log      *slog.Logger
 
+	// firstPull closes the announce→pull loop: the announce side records when
+	// the cluster was told, this side records when it acted.
+	firstPull *obs.FirstPull
+
 	srv *http.Server
+
+	bound atomic.Bool
 
 	hitSubtree, hitSubtreeData, hitTxs, hitBlock atomic.Uint64
 	miss, errs                                   atomic.Uint64
@@ -80,6 +88,15 @@ func New(cfg Config, subtrees, blocks Store, txs TxStore, log *slog.Logger) *Ser
 	return &Server{cfg: cfg, subtrees: subtrees, blocks: blocks, txs: txs, log: log}
 }
 
+// Listening reports whether the retrieval plane has its listener open. It gates
+// readiness: an announcement already sent points at this socket, and Teranode
+// does not retry a failed subtree fetch, so a bridge that announced and then
+// cannot answer has lost that object rather than delayed it.
+func (s *Server) Listening() bool { return s.bound.Load() }
+
+// SetFirstPull attaches the announce→first-pull tracker.
+func (s *Server) SetFirstPull(f *obs.FirstPull) { s.firstPull = f }
+
 // BaseURL is the value to announce: the address the cluster will dial, with the
 // API prefix and no trailing slash (a trailing slash would produce "//subtree/").
 func (s *Server) BaseURL(advertise string) string {
@@ -92,21 +109,45 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	p := s.cfg.APIPrefix
 
-	mux.HandleFunc("GET "+p+"/subtree/{hash}", s.getSubtree)
-	mux.HandleFunc("GET "+p+"/subtree_data/{hash}", s.getSubtreeData)
-	mux.HandleFunc("POST "+p+"/subtree/{hash}/txs", s.postSubtreeTxs)
-	mux.HandleFunc("GET "+p+"/block/{hash}", s.getBlock)
+	mux.HandleFunc("GET "+p+"/subtree/{hash}", s.timed("subtree", s.getSubtree))
+	mux.HandleFunc("GET "+p+"/subtree_data/{hash}", s.timed("subtree_data", s.getSubtreeData))
+	mux.HandleFunc("POST "+p+"/subtree/{hash}/txs", s.timed("txs", s.postSubtreeTxs))
+	mux.HandleFunc("GET "+p+"/block/{hash}", s.timed("block", s.getBlock))
 
 	// One caller in the cluster appends the API prefix to an already-prefixed
 	// base URL, producing /api/v1/api/v1/subtree_data/{hash}. Serving the alias
 	// costs nothing and avoids a failure that would look like a missing object.
-	mux.HandleFunc("GET "+p+p+"/subtree_data/{hash}", s.getSubtreeData)
+	mux.HandleFunc("GET "+p+p+"/subtree_data/{hash}", s.timed("subtree_data", s.getSubtreeData))
 
 	// Everything else — /blocks, /headers_from_common_ancestor, /tx — is a
 	// catchup or convenience route the bridge has no data for. 404 is the honest
 	// answer and keeps us out of the cluster's malicious-peer classification.
-	mux.HandleFunc("/", s.notFound)
-	return mux
+	mux.HandleFunc("/", s.timed("unserved", s.notFound))
+
+	// Trace context arrives on the cluster's fetch, which happens INSIDE its
+	// block-validation span. Extracting it here is what keeps "why was this
+	// block slow to validate" from dead-ending at the bridge. With tracing
+	// disabled the global provider is a no-op and this costs a map lookup per
+	// request.
+	return otelhttp.NewHandler(mux, "retrieval",
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			return r.Method + " " + r.URL.Path
+		}))
+}
+
+// timed wraps a handler with the route-latency histogram and the pull-freshness
+// stamp. The duration is measured to the point the handler returns, which for
+// the streaming routes is after the body has been written — that is the number
+// the cluster actually waits on.
+func (s *Server) timed(route string, h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		defer func() {
+			obs.Since(obs.RetrievalDuration, start, route)
+			obs.Stamp(obs.LastPullTime)
+		}()
+		h(w, r)
+	}
 }
 
 // Serve runs until ctx is cancelled.
@@ -123,6 +164,8 @@ func (s *Server) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("retrieval: listen %s: %w", s.cfg.Listen, err)
 	}
+	s.bound.Store(true)
+	defer s.bound.Store(false)
 	s.log.Info("retrieval plane listening", "addr", s.cfg.Listen, "prefix", s.cfg.APIPrefix)
 
 	go func() {
@@ -159,6 +202,7 @@ func (s *Server) getSubtree(w http.ResponseWriter, r *http.Request) {
 	}
 	nodes := obj[objfmt.SubtreeHeaderSize:]
 	s.hitSubtree.Add(1)
+	s.firstPull.Pulled(h.Display())
 	s.log.Info("served subtree", "hash", h.Display(), "nodes", len(nodes)/32)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	_, _ = w.Write(nodes)
@@ -207,6 +251,7 @@ func (s *Server) getSubtreeData(w http.ResponseWriter, r *http.Request) {
 		out = append(out, std...)
 	}
 	s.hitSubtreeData.Add(1)
+	s.firstPull.Pulled(h.Display())
 	s.log.Info("served subtree_data", "hash", h.Display(), "bytes", len(out))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	_, _ = w.Write(out)
@@ -272,6 +317,7 @@ func (s *Server) getBlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.hitBlock.Add(1)
+	s.firstPull.Pulled(h.Display())
 	s.log.Info("served block", "hash", h.Display(), "bytes", len(out))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	_, _ = w.Write(out)

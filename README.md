@@ -52,6 +52,7 @@ them is deployment topology, not a different design.
 
 - [Architecture](docs/architecture.md) — planes, lane framing, announce/pull contract, reverse path, byte order, block frame conversion, failure modes, package layout
 - [Configuration](docs/configuration.md) — every flag, defaults, required-flag matrix, deployment examples, reading the stats
+- [Metrics reference](docs/references/prometheusMetrics.md) — every metric, the endpoints, and the alert expressions
 - [BRC-143 — Subtree Data](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-143-subtree-data.md)
 - [BRC-144 — Block Frame](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-144-block-frame.md)
 - [BRC-30 — Transaction Extended Format (EF)](https://github.com/bsv-blockchain/BRCs/blob/master/transactions/0030.md) — what the tx lane carries, preserved end to end so the validator gets its prevout data
@@ -118,23 +119,37 @@ See [docs/configuration.md](docs/configuration.md) for the full flag reference.
 | `9143` | in | subtree lane (BRC-143 push frames) |
 | `9144` | in | block lane (BRC-144 push frames) |
 | `9145` | in | retrieval plane — the cluster's pulls |
-| `9146` | in | `/metrics`, `/healthz`, `/readyz`, `/loglevel` |
+| `9146` | in | `/metrics`, `/health*`, `/healthz`, `/readyz`, `/loglevel`, `/debug/pprof` |
 | `8726` | out | BRC-143 subtree submits to the object-plane ingress |
 | `8727` | out | BRC-144 block submits to the object-plane ingress |
 
 ## Observability
 
-Prometheus metrics on `-metrics-addr` (default `[::]:9146`) under the `btb_`
-prefix, alongside `/healthz`, `/readyz` (ready once every lane is bound) and a
-runtime `POST /loglevel`. Structured `log/slog` output carries the same numbers
-in a stats block every `-stats-every` (default 60 s).
+Metrics, health, tracing and profiling are shaped to match Teranode's own, so a
+bridge reads like a cluster service rather than a foreign appliance: series are
+`teranode_bridge_*` on the same `Namespace`/`Subsystem` grid, histograms use
+Teranode's bucket sets verbatim, and `/health`, `/health/readiness` and
+`/health/liveness` answer with the same JSON dependency report and the same
+`?timeout=` override.
 
-The alert that matters is **`btb_echo_mismatch_total`** (log line
+Everything is on `-metrics-addr` (default `[::]:9146`). Structured `log/slog`
+output carries the same numbers in a stats block every `-stats-every` (60 s).
+
+The alert that matters is **`teranode_bridge_echo_mismatch_total`** (log line
 `ECHO MISMATCH`): non-zero means the object plane returned different bytes than
-were published — a data-integrity fault, not a delivery hiccup. Worth watching
-too: `btb_lane_connections_dropped_total` (framing faults),
-`btb_announce_failures_total`, and `btb_retrieval_misses_total` climbing against
-a flat `btb_cache_evicted_total`.
+were published — a data-integrity fault, not a delivery hiccup. Two more are
+specific to what a landing shim can get wrong: `teranode_bridge_announce_to_first_pull_seconds`
+is the only measurement of whether the announce-shim trick is working at all
+(nothing on either side of the bridge measures it), and
+`sum(teranode_bridge_submitter_active)` must equal exactly 1 per cluster per
+class — 0 means nothing is published upward, 2 means double publish.
+
+- [Metrics reference](docs/references/prometheusMetrics.md) — every series, with the alert expressions worth running
+- [Configuration › Observability endpoints](docs/configuration.md#observability-endpoints) — flags, gating vs advisory health, tracing, profiling
+
+> Series that were `btb_*` are dual-emitted under both names while
+> `-metrics-legacy-prefix` is true (the default), so existing dashboards survive
+> the cutover.
 
 ## Container image
 

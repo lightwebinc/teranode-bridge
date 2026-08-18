@@ -16,8 +16,11 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/lightwebinc/teranode-bridge/internal/encode"
 	"github.com/lightwebinc/teranode-bridge/internal/hashid"
+	"github.com/lightwebinc/teranode-bridge/internal/obs"
 	"github.com/lightwebinc/teranode-bridge/internal/tnwire"
 )
 
@@ -32,7 +35,12 @@ func New(base string, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return &Client{base: strings.TrimRight(base, "/"), client: &http.Client{Timeout: timeout}}
+	return &Client{
+		base: strings.TrimRight(base, "/"),
+		// otelhttp so the reverse path's fetch joins the cluster's trace rather
+		// than starting a detached one.
+		client: &http.Client{Timeout: timeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
+	}
 }
 
 // BuildSubtree fetches a subtree's node hashes and encodes the BRC-143 frame.
@@ -41,6 +49,7 @@ func New(base string, timeout time.Duration) *Client {
 // identity the cluster gave us are the same value — no recomputation, and no
 // chance of publishing a root that disagrees with the node list.
 func (c *Client) BuildSubtree(ctx context.Context, hash hashid.Hash) ([]byte, bool, error) {
+	defer obs.Timer(obs.AssetFetchDuration, "subtree")()
 	body, status, err := c.get(ctx, "/subtree/"+hash.Display())
 	if err != nil {
 		return nil, false, err
@@ -74,6 +83,8 @@ func (c *Client) BuildSubtree(ctx context.Context, hash hashid.Hash) ([]byte, bo
 // Everything the frame needs is in the response, including the coinbase and its
 // BUMP, so no part of the block is reconstructed or guessed.
 func (c *Client) BuildBlock(ctx context.Context, hash hashid.Hash) ([]byte, bool, error) {
+	defer obs.Timer(obs.AssetFetchDuration, "block")()
+
 	body, status, err := c.get(ctx, "/block/"+hash.Display())
 	if err != nil {
 		return nil, false, err
