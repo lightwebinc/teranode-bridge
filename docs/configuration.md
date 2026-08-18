@@ -346,6 +346,78 @@ nothing at all or firing immediately.
 Histograms use Teranode's bucket sets verbatim, so a bridge series and a cluster
 series bucket identically and can share a panel and a quantile.
 
+### Blockchain connection: transport security and liveness
+
+The reverse path holds one long-lived gRPC connection to the cluster's
+blockchain service. Two things about it are not defaults.
+
+**TLS is an interop setting, not just hardening.** `security_level_grpc` is a
+**global** Teranode setting: when it is non-zero, every Teranode gRPC listener —
+blockchain included — is wrapped in TLS. A bridge that dials plaintext then
+cannot connect at all, and the failure is partial in the worst way. Delivery
+lanes, announce and the retrieval plane keep working; only the reverse path
+dies, as an endless `blockchain subscribe failed, retrying`.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-blockchain-security-level` | `0` | Mirrors `security_level_grpc`. See the table below. |
+| `-blockchain-ca-cert` | — | CA that signs the cluster's gRPC server certificate (levels 2–3). |
+| `-blockchain-cert` | — | Client certificate presented to the cluster (levels 2–3). |
+| `-blockchain-key` | — | Private key for `-blockchain-cert` (levels 2–3). |
+
+| Level | Cluster side | Bridge side |
+| --- | --- | --- |
+| `0` | plaintext (Teranode's default) | plaintext |
+| `1` | TLS | TLS, **server certificate not verified** — upstream's own comment calls this MITM-exploitable by design. Encrypts against passive eavesdropping and nothing more. |
+| `2` | TLS, accepts any client certificate | presents a certificate, verifies the server against the CA |
+| `3` | TLS, requires and verifies the client certificate | identical to level 2 — only the server's `ClientAuth` differs |
+
+> Worth knowing before choosing 2 or 3: no Teranode **client** call site
+> populates its certificate paths — only the server path does, from
+> `server_certFile`/`server_keyFile`. At level 2 or 3 upstream's own
+> inter-service clients read `""` and fail to dial, so a cluster configured that
+> way has broken inter-service gRPC independently of the bridge. In practice a
+> working cluster runs at level 0 or 1, and **level 1 is the one this matters
+> for**. The bridge implements 2 and 3 because it *can* carry cert paths.
+
+Misconfiguration is refused at startup with the flag named, rather than
+surfacing later as a handshake error that reads like a cluster fault. The
+blockchain service registers no API-key interceptor, so no credential beyond TLS
+is needed.
+
+**Keepalive is what stops the reverse path wedging.** grpc-go's client keepalive
+default is *never* — an unconfigured client sends no pings. The connection
+crosses a tunnel, and a silently dropped path (a WireGuard rekey, a conntrack
+eviction, a firewall losing state) does not close the socket: `Recv` blocks
+forever and the reconnect loop, which is only entered on a `Recv` error, never
+runs. The cluster's own keepalive does not help — it tears down *its* half, and
+the client never learns. Blockchain sends `PING` notifications every 10 s, so
+`teranode_bridge_last_notification_timestamp_seconds` makes the wedge visible
+within seconds; visible is not self-healing, and before this the only recovery
+was restarting the process.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-blockchain-keepalive` | `30s` | Ping interval, matching upstream's client default. Must be **≥ the cluster's `grpc_server_min_ping_time_seconds`** (default 30 s) or the server answers `GOAWAY ENHANCE_YOUR_CALM too_many_pings` — which the reconnect loop would retry, turning a liveness mechanism into a ping storm. |
+| `-blockchain-keepalive-timeout` | `20s` | How long to wait for a ping reply before declaring the connection dead. |
+| `-blockchain-keepalive-when-idle` | `true` | Ping with no stream open, matching `grpc_permit_without_stream`. Set `false` if the cluster sets it false. |
+
+grpc-go silently raises any interval below **10 s** to 10 s and logs the change
+through its own logger; the bridge clamps first and warns in its own log, so
+`-blockchain-keepalive 5s` does not quietly become something else.
+
+With the defaults a dead path is detected within `keepalive + timeout`, the
+transport closes, `Recv` returns, and the existing reconnect loop takes over.
+
+> **No retry interceptor.** Teranode gives its gRPC clients one; the bridge does
+> not adopt it. It is unary-only, so it would never touch the Subscribe stream —
+> the call whose recovery actually matters, and which already reconnects with
+> backoff. That leaves the two cluster-state polls, on a 15 s ticker under a 5 s
+> deadline with their own error counter, where retrying inside the deadline buys
+> nothing the next tick does not. Upstream's version would also import two
+> defects: its backoff is a bare `time.Sleep` with no `ctx.Done()` select, and it
+> retries `DeadlineExceeded`, which for an expired context can never succeed.
+
 ### Tracing
 
 Off by default, as upstream. Even when off the W3C propagator is installed, so

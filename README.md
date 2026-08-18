@@ -146,6 +146,7 @@ class — 0 means nothing is published upward, 2 means double publish.
 
 - [Metrics reference](docs/references/prometheusMetrics.md) — every series, with the alert expressions worth running
 - [Configuration › Observability endpoints](docs/configuration.md#observability-endpoints) — flags, gating vs advisory health, tracing, profiling
+- [Configuration › Blockchain connection](docs/configuration.md#blockchain-connection-transport-security-and-liveness) — `security_level_grpc` interop and the keepalive that stops the reverse path wedging
 
 > Series that were `btb_*` are dual-emitted under both names while
 > `-metrics-legacy-prefix` is true (the default), so existing dashboards survive

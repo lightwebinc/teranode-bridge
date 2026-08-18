@@ -90,6 +90,15 @@ func main() {
 		submitter   = flag.Bool("submitter", true, "hold the submitter role for this cluster; exactly one bridge per class should")
 		submitProbe = flag.String("submitter-probe", "", "primary bridge /readyz URL; set on a STANDBY (-submitter=false) to auto-promote when the primary dies and demote when it returns")
 
+		bcSecurity = flag.Int("blockchain-security-level", 0, "transport security for the blockchain gRPC connection, mirroring Teranode's security_level_grpc: 0 plaintext (upstream default), 1 TLS WITHOUT verifying the server (upstream calls this MITM-exploitable by design), 2/3 TLS presenting a client certificate and verifying the server against a CA. security_level_grpc is GLOBAL cluster-side, so a cluster running any non-zero level cannot be reached by a plaintext dial at all — and only the reverse path fails, which reads as an endless subscribe retry while delivery keeps working")
+		bcCACert   = flag.String("blockchain-ca-cert", "", "CA certificate that signs the cluster's gRPC server cert (levels 2-3)")
+		bcCert     = flag.String("blockchain-cert", "", "client certificate presented to the cluster (levels 2-3)")
+		bcKey      = flag.String("blockchain-key", "", "private key for -blockchain-cert (levels 2-3)")
+
+		bcKeepalive        = flag.Duration("blockchain-keepalive", reverse.DefaultKeepaliveTime, "how often to ping the blockchain connection. grpc-go's client default is NEVER, so without this a silently dropped path leaves the notification stream's Recv blocked forever and the reverse path wedges until restart. Must be >= the cluster's grpc_server_min_ping_time_seconds (default 30s) or the server answers GOAWAY too_many_pings")
+		bcKeepaliveTimeout = flag.Duration("blockchain-keepalive-timeout", reverse.DefaultKeepaliveTimeout, "how long to wait for a keepalive ping reply before declaring the connection dead")
+		bcPingIdle         = flag.Bool("blockchain-keepalive-when-idle", true, "ping even while no stream is open, matching the cluster's grpc_permit_without_stream default. Set false if the cluster sets that false, or it will GOAWAY the connection between reconnects")
+
 		mode       = flag.String("mode", "all", "all = full bridge; sink = receive, verify and count only (no cluster targets)")
 		cacheBytes = flag.Int64("cache-bytes", 1<<30, "object cache ceiling in bytes")
 		cacheTTL   = flag.Duration("cache-ttl", 10*time.Minute, "how long a pushed object stays fetchable")
@@ -290,6 +299,15 @@ func main() {
 			Ready:          submitterReady(laneSet, started, *submitGrace, *submitBlind, log),
 			GRPCMetrics:    rec.GRPCClientMetrics,
 			ClusterPoll:    *clusterPoll,
+			TLS: reverse.TLSConfig{
+				SecurityLevel: *bcSecurity,
+				CACertFile:    *bcCACert,
+				CertFile:      *bcCert,
+				KeyFile:       *bcKey,
+			},
+			KeepaliveTime:       *bcKeepalive,
+			KeepaliveTimeout:    *bcKeepaliveTimeout,
+			PermitWithoutStream: *bcPingIdle,
 		}, seen, builderFunc{asset}, log)
 		if err != nil {
 			log.Error("reverse path", "err", err)
@@ -297,7 +315,11 @@ func main() {
 		}
 		defer func() { _ = rev.Close() }()
 		log.Info("reverse path enabled", "blockchain", *blockchain, "asset", *localAsset,
-			"edge_ingress", *edgeIngress, "submitter", *submitter)
+			"edge_ingress", *edgeIngress, "submitter", *submitter,
+			"security_level", *bcSecurity, "keepalive", *bcKeepalive)
+		if *bcSecurity == 1 {
+			log.Warn("blockchain security level 1 encrypts the channel but does NOT verify the cluster's certificate; use 2 or 3 where a CA is available")
+		}
 		rev.SetActive(*submitter)
 		if *submitProbe != "" {
 			if *submitter {

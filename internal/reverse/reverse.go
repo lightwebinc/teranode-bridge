@@ -29,7 +29,6 @@ import (
 	grpcprom "github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/lightwebinc/teranode-bridge/proto/blockchain_api"
 
@@ -109,6 +108,21 @@ type Config struct {
 	// ClusterPoll is how often to read the cluster's FSM state and tip height
 	// over the blockchain connection. Zero disables the poll.
 	ClusterPoll time.Duration
+
+	// TLS mirrors Teranode's security_level_grpc and its certificate paths.
+	// Level 0 (plaintext) is upstream's default; a cluster running any other
+	// level cannot be reached at all by a plaintext dial. See dial.go.
+	TLS TLSConfig
+
+	// KeepaliveTime and KeepaliveTimeout set the client keepalive policy.
+	// Zero picks upstream's client defaults (30s / 20s). KeepaliveTime must be
+	// at least the server's grpc_server_min_ping_time_seconds or the server
+	// answers GOAWAY too_many_pings.
+	KeepaliveTime, KeepaliveTimeout time.Duration
+
+	// PermitWithoutStream allows pings while no stream is open, matching
+	// upstream's grpc_permit_without_stream default.
+	PermitWithoutStream bool
 }
 
 // Subscriber watches the cluster and republishes what it produces.
@@ -141,8 +155,11 @@ func (s *Subscriber) SetActive(v bool) { s.active.Store(v) }
 // Active reports whether this subscriber currently publishes.
 func (s *Subscriber) Active() bool { return s.active.Load() }
 
-// New dials the blockchain service. The listener is plaintext and
-// unauthenticated in this deployment.
+// New dials the blockchain service.
+//
+// Transport security follows Teranode's own security_level_grpc; the blockchain
+// service registers no API-key interceptor (util.StartGRPCServer is called with
+// nil auth options), so no credential beyond TLS is required.
 func New(cfg Config, seen *registry.Registry, build Builder, log *slog.Logger) (*Subscriber, error) {
 	if cfg.BlockchainAddr == "" {
 		return nil, errors.New("reverse: no blockchain address configured")
@@ -150,8 +167,22 @@ func New(cfg Config, seen *registry.Registry, build Builder, log *slog.Logger) (
 	if cfg.Source == "" {
 		cfg.Source = "teranode-bridge"
 	}
+	creds, err := cfg.TLS.credentials()
+	if err != nil {
+		return nil, fmt.Errorf("reverse: blockchain transport security: %w", err)
+	}
+	ka, clamped := keepaliveParams(cfg.KeepaliveTime, cfg.KeepaliveTimeout, cfg.PermitWithoutStream)
+	if clamped {
+		log.Warn("blockchain keepalive interval raised to grpc's floor",
+			"requested", cfg.KeepaliveTime, "using", ka.Time)
+	}
 	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(creds),
+		// Without this the client NEVER pings (grpc-go's default is infinity),
+		// and a silently dropped path leaves the Subscribe stream's Recv
+		// blocked forever — the reconnect loop below is only entered on a Recv
+		// error. See keepaliveParams.
+		grpc.WithKeepaliveParams(ka),
 		// Teranode gives every gRPC client an OTel stats handler and a
 		// Prometheus client interceptor (teranode/util/grpc_helper.go
 		// GetGRPCClient). A bare connection here left the reverse path with no

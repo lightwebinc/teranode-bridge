@@ -139,7 +139,7 @@ cluster stay distinguishable on one dashboard.
 | `teranode_bridge_reverse_published_total` | Counter | Cluster-produced objects published upward, by `class`. |
 | `teranode_bridge_reverse_skipped_total` | Counter | Notifications not published, by `reason` (`remote_origin`, `unavailable`, `foreign_origin`, `not_ready`, `standby`). |
 | `teranode_bridge_reverse_failures_total` | Counter | Asset fetch, frame encode or upward submit failures. |
-| `teranode_bridge_reverse_reconnects_total` | Counter | Notification-stream reconnects. Routine. |
+| `teranode_bridge_reverse_reconnects_total` | Counter | Notification-stream reconnects. Routine — the cluster rolls its gRPC connections — and also how a keepalive-detected dead path surfaces. A step change with no cluster restart points at the network path, not the cluster. |
 | `teranode_bridge_submitter_active` | Gauge | 1 while this bridge holds the submitter role, 0 on a standby. **Must sum to exactly 1 per cluster per class.** |
 | `teranode_bridge_asset_fetch_duration_seconds` | Histogram | Time to build an object from the cluster's asset service, by `class`. Buckets: `MetricsBucketsMilliLongSeconds`. |
 | `teranode_bridge_uptunnel_objects_total` | Counter | Objects written to the object-plane ingress, by `class`. |
@@ -214,7 +214,7 @@ chart (`monitoring.prometheusRule.enabled`).
 | `BridgeNoSubmitter` | `sum by (cluster) (teranode_bridge_submitter_active) == 0` | Nothing is publishing cluster output upward. |
 | `BridgeDoubleSubmitter` | `sum by (cluster) (teranode_bridge_submitter_active) > 1` | Two bridges publishing. Dedup absorbs it, but it means the failover logic is confused. |
 | `BridgeLaneStalled` | `time() - teranode_bridge_last_object_timestamp_seconds > 900` | No delivery on a lane. Catches whole-edge death, which the counters cannot. |
-| `BridgeSubscriptionDead` | `time() - teranode_bridge_last_notification_timestamp_seconds > 300` | The blockchain notification stream is silent, PINGs included. |
+| `BridgeSubscriptionDead` | `time() - teranode_bridge_last_notification_timestamp_seconds > 300` | The blockchain notification stream is silent, PINGs included. Client keepalive should now turn a dead path into a reconnect within ~50s, so this firing means something keepalive cannot fix — the cluster stopped sending, or the connection is up but the stream is not. |
 | `BridgeAnnounceBacklog` | `teranode_bridge_kafka_producer_buffered_records > 0` for 5m | Announcements are queuing, not failing. |
 | `BridgeAwaitingPullClimbing` | `teranode_bridge_announce_awaiting_pull > 100` for 15m | The cluster is not acting on announcements. |
 | `BridgeUnattributedSubmits` | `rate(teranode_bridge_txpipe_unattributed_total[15m]) > 0` | Delivery counts are incomplete, not merely bad. |

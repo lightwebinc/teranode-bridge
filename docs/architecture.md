@@ -554,6 +554,26 @@ Announcements ride Kafka, where Teranode does not propagate trace context either
 not invent a scheme of its own; when upstream adds a `trace_context` field, the
 bridge must carry it too or become the only remaining hole.
 
+### The blockchain connection
+
+Transport security follows Teranode's `security_level_grpc`, which is a **global**
+cluster setting: a non-zero value wraps every Teranode gRPC listener in TLS, and
+a plaintext dial then fails outright. That failure is partial and easy to
+misread — delivery, announce and retrieval all keep working while only the
+reverse path retries forever — which is why the level is an explicit bridge flag
+rather than an assumption.
+
+Client keepalive is load-bearing rather than tuning. grpc-go pings never by
+default, the connection crosses a tunnel, and a silently dropped path leaves
+`Recv` blocked with no error to enter the reconnect loop on. The cluster's own
+keepalive tears down its half without the client noticing. Pings turn that
+invisible wedge into an ordinary reconnect.
+
+Teranode's unary retry interceptor is deliberately **not** adopted: it cannot
+touch the Subscribe stream, which is the call that matters and already has its
+own backoff loop, and the two cluster-state polls it would cover are cheap and
+re-run on the next tick.
+
 ### Cluster state
 
 The reverse path's blockchain connection is also polled for the cluster's FSM
