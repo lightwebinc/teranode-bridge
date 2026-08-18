@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/lightwebinc/shard-common/objfmt"
+	dto "github.com/prometheus/client_model/go"
 
 	"github.com/lightwebinc/teranode-bridge/internal/cache"
 	"github.com/lightwebinc/teranode-bridge/internal/hashid"
@@ -296,5 +297,55 @@ func TestListeningGatesReadiness(t *testing.T) {
 	s, _, _, _ := testServer(t)
 	if s.Listening() {
 		t.Fatal("reports listening before Serve bound a socket")
+	}
+}
+
+// TestUnservedRouteDoesNotStampLastPull pins the meaning of the last-pull
+// freshness gauge: "the cluster is still fetching objects from us".
+//
+// The catch-all is timed but must not stamp it. A cluster that had stopped
+// pulling entirely while still occasionally probing an unserved route — a
+// chain-sync attempt, a stray /tx — would otherwise keep the gauge fresh, and
+// the staleness alert built on it would never fire.
+func TestUnservedRouteDoesNotStampLastPull(t *testing.T) {
+	_, _, _, h := testServer(t)
+
+	read := func() float64 {
+		t.Helper()
+		g, err := obs.LastPullTime.GetMetricWithLabelValues()
+		if err != nil {
+			t.Fatalf("gauge: %v", err)
+		}
+		m := &dto.Metric{}
+		if err := g.Write(m); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		return m.GetGauge().GetValue()
+	}
+
+	obs.LastPullTime.WithLabelValues().Set(0)
+	resp, err := h.Client().Get(h.URL + "/headers_from_common_ancestor")
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unserved route answered %d, want 404", resp.StatusCode)
+	}
+	if got := read(); got != 0 {
+		t.Fatalf("an unserved route stamped last-pull (%v); a cluster that stopped "+
+			"pulling but kept probing would look fresh forever", got)
+	}
+
+	// A route the bridge actually serves must stamp it, 404 or not — the
+	// cluster asked us for an object, which is the thing being measured.
+	obs.LastPullTime.WithLabelValues().Set(0)
+	resp, err = h.Client().Get(h.URL + "/api/v1/subtree/" + hashid.Hash([32]byte{1}).Display())
+	if err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	_ = resp.Body.Close()
+	if read() == 0 {
+		t.Fatal("a served route did not stamp last-pull")
 	}
 }
