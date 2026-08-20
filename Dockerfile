@@ -31,5 +31,5 @@ FROM gcr.io/distroless/static:nonroot
 USER nonroot:nonroot
 COPY --from=builder /out/ /usr/local/bin/
 # tx / subtree / block delivery lanes, then the retrieval plane.
-EXPOSE 8833 9143 9144 9145
+EXPOSE 8725 9143 9144 9145
 ENTRYPOINT ["/usr/local/bin/teranode-bridge"]

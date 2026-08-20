@@ -1,7 +1,7 @@
 // Command tnbench drives the teranode-bridge tx lane at saturation.
 //
 //	tnbench mock  -listen 127.0.0.1:20833 [-faithful]  — propagation stand-in
-//	tnbench feed  -addr 127.0.0.1:28833 -conns 8 -dur 20s
+//	tnbench feed  -addr 127.0.0.1:28725 -conns 8 -dur 20s
 //
 // # What each mock proves
 //
@@ -129,7 +129,7 @@ func main() {
 
 	case "feed":
 		fs := flag.NewFlagSet("feed", flag.ExitOnError)
-		addr := fs.String("addr", "127.0.0.1:28833", "")
+		addr := fs.String("addr", "127.0.0.1:28725", "")
 		conns := fs.Int("conns", 8, "")
 		dur := fs.Duration("dur", 20*time.Second, "")
 		chain := fs.Bool("chain", false, "each tx spends the previous one — exercises dependency sealing and the missing-parent retry under load (independent txs otherwise)")

@@ -47,7 +47,7 @@ so there is no affinity and no per-instance URL bookkeeping.
    object plane                    teranode-bridge                 Teranode LAN
  ───────────────────────────────────────────────────────────────────────────────
 
-   tx lane      ─────────▶ :8833 ──┬──▶ tx cache
+   tx lane      ─────────▶ :8725 ──┬──▶ tx cache
    (BRC-30 EF)                     └──▶ txpipe ── POST /txs (batched) ──▶ propagation
 
    subtree lane ─────────▶ :9143 ──┬──▶ object cache
@@ -83,7 +83,7 @@ sync marker. Objects are delimited by walking their own structure, which
 
 | Class                         | Delimited by                                    | Default bind |
 | ----------------------------- | ----------------------------------------------- | ------------ |
-| `tx` (BRC-30 extended format) | walking version, input/output vectors, locktime | `[::]:8833`  |
+| `tx` (BRC-30 extended format) | walking version, input/output vectors, locktime | `[::]:8725`  |
 | `subtree` (BRC-143)           | the 40-byte header's `NodeCount`                | `[::]:9143`  |
 | `block` (BRC-144)             | the 104-byte prefix's counts                    | `[::]:9144`  |
 

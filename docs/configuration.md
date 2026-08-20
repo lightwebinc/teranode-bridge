@@ -21,7 +21,7 @@ their own structure.
 
 | Flag              | Default     | Description                                                                                                                                                |
 | ----------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-tx-listen`      | `[::]:8833` | Transaction lane (BRC-30 extended format only — a BRC-12 standard transaction is refused at the lane and counted in `teranode_bridge_lane_objects_rejected_total{lane="tx"}`, never submitted). |
+| `-tx-listen`      | `[::]:8725` | Transaction lane (BRC-30 extended format only — a BRC-12 standard transaction is refused at the lane and counted in `teranode_bridge_lane_objects_rejected_total{lane="tx"}`, never submitted). |
 | `-subtree-listen` | `[::]:9143` | Subtree lane (BRC-143 push frames).                                                                                                                        |
 | `-block-listen`   | `[::]:9144` | Block lane (BRC-144 push frames).                                                                                                                          |
 | `-max-object`     | `0`         | Per-object size ceiling in bytes. `0` uses the `objfmt` codec default of 64 MiB. Applies to every lane.                                                    |
@@ -495,7 +495,7 @@ and serves the pulls. No reverse path.
 
 ```bash
 teranode-bridge \
-  -tx-listen        '[2001:db8:3f::1]:8833' \
+  -tx-listen        '[2001:db8:3f::1]:8725' \
   -subtree-listen   '[2001:db8:3f::1]:9143' \
   -block-listen     '[2001:db8:3f::1]:9144' \
   -retrieval-listen '[2001:db8:3f::1]:9145' \
@@ -511,7 +511,7 @@ object plane.
 
 ```bash
 teranode-bridge \
-  -tx-listen        '[2001:db8:3f::1]:8833' \
+  -tx-listen        '[2001:db8:3f::1]:8725' \
   -subtree-listen   '[2001:db8:3f::1]:9143' \
   -block-listen     '[2001:db8:3f::1]:9144' \
   -retrieval-listen '[2001:db8:3f::1]:9145' \
@@ -555,7 +555,7 @@ teranode-bridge \
 ```bash
 teranode-bridge \
   -mode sink \
-  -tx-listen      '[2001:db8:3f::1]:8833' \
+  -tx-listen      '[2001:db8:3f::1]:8725' \
   -subtree-listen '[2001:db8:3f::1]:9143' \
   -block-listen   '[2001:db8:3f::1]:9144' \
   -stats-every 10s \
@@ -572,7 +572,7 @@ Wants=network-online.target
 
 [Service]
 ExecStart=/usr/local/bin/teranode-bridge \
-  -tx-listen '[2001:db8:3f::1]:8833' \
+  -tx-listen '[2001:db8:3f::1]:8725' \
   -subtree-listen '[2001:db8:3f::1]:9143' \
   -block-listen '[2001:db8:3f::1]:9144' \
   -retrieval-listen '[2001:db8:3f::1]:9145' \
@@ -601,7 +601,7 @@ they go in the container command (or a chart's `args`).
 
 ```bash
 docker run --rm \
-  -p 8833:8833 -p 9143:9143 -p 9144:9144 -p 9145:9145 \
+  -p 8725:8725 -p 9143:9143 -p 9144:9144 -p 9145:9145 \
   ghcr.io/lightwebinc/teranode-bridge:0.5.0 \
     -advertise   'http://[2001:db8:3f::1]:9145' \
     -propagation 'http://192.0.2.10:20833' \
