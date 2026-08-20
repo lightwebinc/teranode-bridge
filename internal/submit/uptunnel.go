@@ -20,15 +20,28 @@ import (
 // sync marker — so a partial write leaves the edge's parser mid-object with no
 // way to resynchronise: the only correct recovery is to drop the connection and
 // redial, which is what a failed Write does here.
+//
+// Addrs is a FAILOVER list, not a pool. With slot identity the submit targets
+// are the tunnel's per-side slot inners ([sideA]:port, [sideB]:port), and an
+// A→B failover moves delivery to the other side while this submitter would
+// otherwise keep dialling the dead one forever — the customer-side half of
+// "submit inherits STE mobility" that a single static address cannot provide.
+// The dialer is sticky on whichever address last worked (submits must not flap
+// between edges on transient blips) and advances to the next address only when
+// a DIAL fails — a dead side refuses or times out, which is exactly the signal
+// the active side has moved. A failed WRITE redials the same address first:
+// one broken write is a dropped connection, not evidence the side is gone.
 type UpTunnel struct {
-	// Addr is host:port of the edge's ingress for this class (8726 subtree,
-	// 8727 block), reachable only through the tunnel.
-	Addr  string
+	// Addrs are host:port targets for this class's ingress (8726 subtree, 8727
+	// block), reachable only through the tunnel, tried in order from the last
+	// one that worked.
+	Addrs []string
 	Class string
 	Log   *slog.Logger
 
 	mu   sync.Mutex
 	conn net.Conn
+	cur  int // index into Addrs of the address conn was dialled to / to try next
 
 	sent, bytes, failures, redials atomic.Uint64
 }
@@ -47,15 +60,34 @@ func (u *UpTunnel) Send(ctx context.Context, obj []byte) error {
 	defer u.mu.Unlock()
 
 	if u.conn == nil {
-		d := net.Dialer{Timeout: 10 * time.Second}
-		c, err := d.DialContext(ctx, "tcp", u.Addr)
-		if err != nil {
-			u.failures.Add(1)
-			return fmt.Errorf("uptunnel %s: dial %s: %w", u.Class, u.Addr, err)
+		if len(u.Addrs) == 0 {
+			return errors.New("uptunnel: no addresses configured")
 		}
-		u.conn = c
-		u.redials.Add(1)
-		u.Log.Info("up-tunnel connected", "class", u.Class, "addr", u.Addr)
+		// One full pass over the list per Send: start at the sticky index and
+		// advance on each dial failure. A Send that exhausts the list fails —
+		// the caller's retry gets a fresh pass, again starting from wherever
+		// the cursor stopped, so a flapping first address cannot starve the
+		// second and a recovered first address is retried eventually.
+		var lastErr error
+		for range u.Addrs {
+			addr := u.Addrs[u.cur%len(u.Addrs)]
+			d := net.Dialer{Timeout: 10 * time.Second}
+			c, err := d.DialContext(ctx, "tcp", addr)
+			if err != nil {
+				u.failures.Add(1)
+				lastErr = err
+				u.cur = (u.cur + 1) % len(u.Addrs)
+				u.Log.Warn("up-tunnel dial failed, trying next", "class", u.Class, "addr", addr, "err", err)
+				continue
+			}
+			u.conn = c
+			u.redials.Add(1)
+			u.Log.Info("up-tunnel connected", "class", u.Class, "addr", addr)
+			break
+		}
+		if u.conn == nil {
+			return fmt.Errorf("uptunnel %s: all %d addresses failed: %w", u.Class, len(u.Addrs), lastErr)
+		}
 	}
 
 	deadline := time.Now().Add(30 * time.Second)

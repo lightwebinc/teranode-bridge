@@ -84,7 +84,7 @@ func main() {
 
 		blockchain  = flag.String("blockchain", "", "cluster blockchain gRPC host:port; enables the reverse path (cluster -> fabric)")
 		localAsset  = flag.String("local-asset", "", "cluster asset base URL incl. API prefix, e.g. http://192.0.2.10:20090/api/v1 (reverse path)")
-		edgeIngress = flag.String("edge-ingress", "", "edge in-fabric ingress host for up-tunnel submits, reachable only through the tunnel")
+		edgeIngress = flag.String("edge-ingress", "", "up-tunnel submit host(s), reachable only through the tunnel; comma-separated failover list — with slot identity, the tunnel's side-A and side-B slot inners")
 		subtreePort = flag.Int("edge-subtree-port", 8726, "edge ingress port for BRC-143 subtree submits")
 		blockPort   = flag.Int("edge-block-port", 8727, "edge ingress port for BRC-144 block submits")
 		submitter   = flag.Bool("submitter", true, "hold the submitter role for this cluster; exactly one bridge per class should")
@@ -283,8 +283,13 @@ func main() {
 		}
 		// Publishers exist regardless of role: a standby keeps them warm so
 		// promotion is a flag flip, not a construction path.
-		upSubtree = &submit.UpTunnel{Addr: net.JoinHostPort(*edgeIngress, strconv.Itoa(*subtreePort)), Class: "subtree", Log: log}
-		upBlock = &submit.UpTunnel{Addr: net.JoinHostPort(*edgeIngress, strconv.Itoa(*blockPort)), Class: "block", Log: log}
+		//
+		// -edge-ingress may name several hosts (comma-separated): with slot
+		// identity these are the tunnel's per-side slot inners, and the
+		// UpTunnel fails over between them so a side flip does not strand
+		// submits on the dead side.
+		upSubtree = &submit.UpTunnel{Addrs: ingressAddrs(*edgeIngress, *subtreePort), Class: "subtree", Log: log}
+		upBlock = &submit.UpTunnel{Addrs: ingressAddrs(*edgeIngress, *blockPort), Class: "block", Log: log}
 		if !*submitter {
 			log.Info("starting as standby: reverse path subscribed but not publishing")
 		}
@@ -666,6 +671,19 @@ func (s cacheStore) Put(h hashid.Hash, class string, body []byte) {
 
 // nilIfNil keeps a typed-nil *UpTunnel from becoming a non-nil Publisher
 // interface, which would make the reverse path try to send through nothing.
+// ingressAddrs expands a comma-separated -edge-ingress host list into host:port
+// targets for one class, preserving order — the first entry is the preferred
+// (normally active-side) target.
+func ingressAddrs(hosts string, port int) []string {
+	var out []string
+	for _, h := range strings.Split(hosts, ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			out = append(out, net.JoinHostPort(h, strconv.Itoa(port)))
+		}
+	}
+	return out
+}
+
 func nilIfNil(u *submit.UpTunnel) reverse.Publisher {
 	if u == nil {
 		return nil
