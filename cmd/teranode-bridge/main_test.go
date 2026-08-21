@@ -87,3 +87,23 @@ func TestHandleTxAcceptsEF(t *testing.T) {
 		t.Fatalf("EF tx must enter the registry, got %d entries", n)
 	}
 }
+
+// TestAnnounceFlagsRequirePeerID pins the startup refusal for announcing
+// modes: an empty -peer-id is the exact config that circuit-breaks the
+// cluster's catchup (the announce URL substitutes for the missing id), so it
+// must never survive to a running announcer. Sink mode is validated elsewhere
+// (the whole block is skipped).
+func TestAnnounceFlagsRequirePeerID(t *testing.T) {
+	if msg := announceFlagsErr(1, 1, "http://x", ""); msg == "" {
+		t.Fatal("empty peer id must be refused for announcing modes")
+	}
+	if msg := announceFlagsErr(1, 1, "http://x", "12D3KooWExample"); msg != "" {
+		t.Fatalf("valid announcing config refused: %q", msg)
+	}
+	if msg := announceFlagsErr(0, 1, "http://x", "12D3KooWExample"); msg == "" {
+		t.Fatal("missing propagation endpoints must be refused")
+	}
+	if msg := announceFlagsErr(1, 1, "", "12D3KooWExample"); msg == "" {
+		t.Fatal("missing advertise URL must be refused")
+	}
+}

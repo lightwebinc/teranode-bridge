@@ -70,7 +70,7 @@ mis-advertised listener passes the ping and then fails at produce time.
 | ---------------- | -------------------- | -------------------------------------------------------------------------------------------- |
 | `-subtree-topic` | `subtrees-teranode1` | Kafka topic the cluster's subtree validation consumes.                                       |
 | `-block-topic`   | `blocks-teranode1`   | Kafka topic the cluster's block validation consumes.                                         |
-| `-peer-id`       | `""`                 | Peer identity stamped on announcements. **Set a synthetic id** (see below); empty is unsafe. |
+| `-peer-id`       | `""`                 | Peer identity stamped on announcements. **Required unless `-mode sink`** — startup refuses an empty id. **Set a synthetic id** (see below). |
 
 Both topic names must match the cluster's own configuration; the defaults match
 Teranode's single-node defaults. An announcement produced to a topic nobody

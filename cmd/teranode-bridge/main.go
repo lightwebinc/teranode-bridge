@@ -80,7 +80,7 @@ func main() {
 
 		subtreeTopic = flag.String("subtree-topic", "subtrees-teranode1", "Kafka topic for subtree announcements")
 		blockTopic   = flag.String("block-topic", "blocks-teranode1", "Kafka topic for block announcements")
-		peerID       = flag.String("peer-id", "", "peer identity stamped on announcements. SET THIS to a valid-format libp2p id that is NOT a real peer (e.g. a freshly derived 12D3KooW… id): the cluster's catchup gate (isPeerBad) treats an unregistered id as unhealthy and diverts catchup to real libp2p peers, while every delivery gate (isPeerMalicious) only checks bans and keeps fetching from us — so the bridge serves objects but can never become a chain-sync source. Empty is UNSAFE: catchup substitutes the announce URL for the missing id, targets our retrieval plane for /headers_from_common_ancestor, 404s, and circuit-breaks the cluster out of recovery (verified at teranode 1cca625; re-verify the two gates on upgrades)")
+		peerID       = flag.String("peer-id", "", "peer identity stamped on announcements; REQUIRED unless -mode sink (startup refuses empty). Set a valid-format libp2p id that is NOT a real peer (e.g. a freshly derived 12D3KooW… id): the cluster's catchup gate (isPeerBad) treats an unregistered id as unhealthy and diverts catchup to real libp2p peers, while every delivery gate (isPeerMalicious) only checks bans and keeps fetching from us — so the bridge serves objects but can never become a chain-sync source. Empty is UNSAFE: catchup substitutes the announce URL for the missing id, targets our retrieval plane for /headers_from_common_ancestor, 404s, and circuit-breaks the cluster out of recovery (verified at teranode 1cca625; re-verify the two gates on upgrades)")
 
 		blockchain  = flag.String("blockchain", "", "cluster blockchain gRPC host:port; enables the reverse path (cluster -> fabric)")
 		localAsset  = flag.String("local-asset", "", "cluster asset base URL incl. API prefix, e.g. http://192.0.2.10:20090/api/v1 (reverse path)")
@@ -170,8 +170,8 @@ func main() {
 	sink := *mode == "sink"
 
 	if !sink {
-		if len(propagation) == 0 || len(brokers) == 0 || *advertise == "" {
-			log.Error("-propagation, -kafka and -advertise are required unless -mode sink")
+		if msg := announceFlagsErr(len(propagation), len(brokers), *advertise, *peerID); msg != "" {
+			log.Error(msg)
 			os.Exit(2)
 		}
 	}
@@ -417,6 +417,23 @@ func main() {
 	}
 	logStats(log, laneSet, objects, txs, seen, pipe, producer, ret, rev, upSubtree, upBlock)
 	log.Info("bridge stopped")
+}
+
+// announceFlagsErr validates the flags an announcing (non-sink) bridge cannot
+// safely run without; a non-empty return is the startup refusal message. An
+// empty peer id is refused rather than warned: the cluster's catchup
+// substitutes the announce URL for a missing id, targets the retrieval plane
+// for /headers_from_common_ancestor, 404s, and circuit-breaks the cluster out
+// of recovery (verified at teranode 1cca625). Sink mode neither announces nor
+// needs an identity, so it is exempt.
+func announceFlagsErr(propagationN, brokersN int, advertise, peerID string) string {
+	if propagationN == 0 || brokersN == 0 || advertise == "" {
+		return "-propagation, -kafka and -advertise are required unless -mode sink"
+	}
+	if peerID == "" {
+		return "-peer-id is required unless -mode sink: set a synthetic valid-format libp2p id that is registered nowhere (see docs/configuration.md); announcing with an empty id makes the cluster's catchup circuit-break against the bridge"
+	}
+	return ""
 }
 
 // handleTx caches the transaction (so it can serve as a subtree member later)
