@@ -22,7 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
+      # Build from the git tag being published: input '0.1.0' -> tag 'v0.1.0'.
+      # Checkout fails the run if that tag does not exist — push the git tag first.
       - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/v${{ github.event.inputs.tag }}
 
       - uses: docker/setup-buildx-action@v4
 
