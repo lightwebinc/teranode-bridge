@@ -32,9 +32,9 @@ import (
 // the active side has moved. A failed WRITE redials the same address first:
 // one broken write is a dropped connection, not evidence the side is gone.
 type UpTunnel struct {
-	// Addrs are host:port targets for this class's ingress (8726 subtree, 8727
-	// block), reachable only through the tunnel, tried in order from the last
-	// one that worked.
+	// Addrs are host:port targets for this class's ingress (9143 subtree, 9144
+	// block — the bare BRC-143/144 lane numbers), reachable only through the
+	// tunnel, tried in order from the last one that worked.
 	Addrs []string
 	Class string
 	Log   *slog.Logger

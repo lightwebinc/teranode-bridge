@@ -59,7 +59,7 @@ them is deployment topology, not a different design.
 
 ## Requirements
 
-- Go 1.25 or later
+- Go 1.26 or later
 - A reachable Teranode cluster (propagation HTTP, Kafka, asset HTTP, blockchain
   gRPC) — or `-mode sink`, which needs none of them
 - Network reachability *from* the cluster back to the bridge's retrieval plane
@@ -120,8 +120,16 @@ See [docs/configuration.md](docs/configuration.md) for the full flag reference.
 | `9144` | in | block lane (BRC-144 push frames) |
 | `9145` | in | retrieval plane — the cluster's pulls |
 | `9146` | in | `/metrics`, `/health*`, `/healthz`, `/readyz`, `/loglevel`, `/debug/pprof` |
-| `8726` | out | BRC-143 subtree submits to the object-plane ingress |
-| `8727` | out | BRC-144 block submits to the object-plane ingress |
+| `9143` | out | BRC-143 subtree submits to the object-plane ingress |
+| `9144` | out | BRC-144 block submits to the object-plane ingress |
+
+Port numbers track the payload: `8725` is the object plane's transaction class
+number, and `9143`/`9144` carry bare BRC-143/BRC-144 objects — the same numbers
+inbound (delivery) and outbound (upward submits), because a bridge only ever
+handles bare, unframed objects. The multicast-framed subtree/block lanes
+(`8726`/`8727`) are not bridge ports, and every listener stays clear of a stock
+cluster's own service ports.
+See [Configuration › Lane numbers](docs/configuration.md#lane-numbers).
 
 ## Observability
 
@@ -160,8 +168,8 @@ set — the bridge is configured entirely by flags, so pass them as the containe
 command or Helm `args`.
 
 ```bash
-docker build --build-arg VERSION=0.5.0 -t teranode-bridge:0.5.0 .
-docker run --rm teranode-bridge:0.5.0 -mode sink
+docker build --build-arg VERSION=0.7.1 -t teranode-bridge:0.7.1 .
+docker run --rm teranode-bridge:0.7.1 -mode sink
 ```
 
 Published images are gated behind a manual `image-publish` workflow run

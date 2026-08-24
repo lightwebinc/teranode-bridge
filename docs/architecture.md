@@ -63,8 +63,8 @@ so there is no affinity and no per-instance URL bookkeeping.
                         plane      POST /subtree/{hash}/txs
                                    GET /block/{hash}
 
-   subtree :8726 ◀─────── reverse ◀── encode BRC-143/144 ◀── GET asset /subtree
-   block   :8727 ◀─────── submit      ▲                      GET asset /block
+   subtree :9143 ◀─────── reverse ◀── encode BRC-143/144 ◀── GET asset /subtree
+   block   :9144 ◀─────── submit      ▲                      GET asset /block
                                       │
                                       └── gRPC Subscribe ◀───── blockchain
                                           (Subtree / Block notifications)
@@ -86,6 +86,10 @@ sync marker. Objects are delimited by walking their own structure, which
 | `tx` (BRC-30 extended format) | walking version, input/output vectors, locktime | `[::]:8725`  |
 | `subtree` (BRC-143)           | the 40-byte header's `NodeCount`                | `[::]:9143`  |
 | `block` (BRC-144)             | the 104-byte prefix's counts                    | `[::]:9144`  |
+
+Lane numbering — the port number tracks the BRC number, and the same numbers
+carry the same bare payload in both directions — is covered in
+[Configuration › Lane numbers](configuration.md#lane-numbers).
 
 Anything that writes bare `objfmt` object streams can feed a lane. In the
 reference stack that is the multicast fabric's delivery side; for tests,
@@ -293,8 +297,8 @@ no imports. Only the proto package name, service name, method name and field
 numbers are load-bearing on the wire.
 
 1. **Learn.** `Subtree` (type 1) fires when a subtree is admitted; `Block`
-   (type 2) on block acceptance. The stream is plaintext and unauthenticated in
-   this deployment. A lost stream is routine — the cluster rolls its gRPC
+   (type 2) on block acceptance. The stream is plaintext and unauthenticated at
+   the default `security_level_grpc`. A lost stream is routine — the cluster rolls its gRPC
    connections — so the subscriber reconnects with backoff from 1 s to 30 s.
 
 2. **Filter by origin.** The notification stream carries **no local-vs-remote
@@ -334,8 +338,9 @@ numbers are load-bearing on the wire.
    unavoidable echo becomes a free correctness check (below).
 
 5. **Submit.** `internal/submit.UpTunnel` holds one long-lived TCP connection
-   per class to the object-plane ingress (`8726` subtree, `8727` block by
-   convention). The stream is bare, so a partial write leaves the receiver's
+   per class to the object-plane ingress (`9143` subtree, `9144` block — the
+   same bare BRC-143/144 lane numbers as delivery, opposite direction). The
+   stream is bare, so a partial write leaves the receiver's
    parser mid-object with no way to resynchronise: the only correct recovery is
    to drop the connection and redial, which is what a failed write does.
 

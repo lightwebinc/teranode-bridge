@@ -19,25 +19,47 @@ One TCP listener per object class. The streams are bare — no length prefix, no
 type tag — so each lane carries exactly one class and objects are delimited by
 their own structure.
 
-| Flag              | Default     | Description                                                                                                                                                |
-| ----------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-tx-listen`      | `[::]:8725` | Transaction lane (BRC-30 extended format only — a BRC-12 standard transaction is refused at the lane and counted in `teranode_bridge_lane_objects_rejected_total{lane="tx"}`, never submitted). |
-| `-subtree-listen` | `[::]:9143` | Subtree lane (BRC-143 push frames).                                                                                                                        |
-| `-block-listen`   | `[::]:9144` | Block lane (BRC-144 push frames).                                                                                                                          |
-| `-max-object`     | `0`         | Per-object size ceiling in bytes. `0` uses the `objfmt` codec default of 64 MiB. Applies to every lane.                                                    |
+| Flag              | Default     | Value                   | Description                                                                                             |
+| ----------------- | ----------- | ----------------------- | -------------------------------------------------------------------------------------------------------- |
+| `-tx-listen`      | `[::]:8725` | `[2001:db8:3f::1]:8725` | Transaction lane. BRC-30 extended format only — a BRC-12 standard transaction is refused at the lane, counted in the lane's `rejected` counter, and never submitted. |
+| `-subtree-listen` | `[::]:9143` | `[2001:db8:3f::1]:9143` | Subtree lane (BRC-143 push frames).                                                                      |
+| `-block-listen`   | `[::]:9144` | `[2001:db8:3f::1]:9144` | Block lane (BRC-144 push frames).                                                                        |
+| `-max-object`     | `0`         | `67108864`              | Per-object size ceiling in bytes. `0` uses the `objfmt` codec default of 64 MiB. Applies to every lane.  |
 
 Bind these to the interface the delivery side reaches the bridge on — typically
 the link-facing address, not `[::]`, once the deployment is settled.
+
+### Lane numbers
+
+Port numbers encode the payload, and the payload is the same in both
+directions:
+
+- **`8725`** is the object plane's transaction class number — the same number an
+  edge's open tx ingress uses, applied here to the delivery direction.
+- **`9143`/`9144`** carry **bare BRC-143 subtree / BRC-144 block objects** with
+  no multicast framing — the port number tracks the BRC number. They serve as
+  the bridge's delivery lanes *and* as the object-plane ingress targets for its
+  upward submits (see
+  [Reverse path](#reverse-path-cluster--object-plane)): a bridge only ever
+  sends and receives bare data, so the same numbers apply in both directions.
+- **`8726`/`8727`** are not bridge ports. They denote **multicast-framed**
+  subtree and block lanes — a payload the bridge never produces or accepts, and
+  one the miner-gated ingress does not admit either: a Teranode-side submitter
+  sends only bare data.
+- Every lane stays clear of a stock cluster's own listen ports, so a bridge can
+  share a LAN — or, pod-attached, a network namespace — with Teranode services.
+  In particular `8833`, a stock cluster's propagation HTTP port, must not be
+  used for the tx lane.
 
 ## Retrieval plane
 
 Answers the pulls the cluster makes after an announcement.
 
-| Flag                | Default     | Description                                                                                                                                                                                                          |
-| ------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-retrieval-listen` | `[::]:9145` | Bind address for the retrieval HTTP server. Must be reachable from the cluster's subtree- and block-validation services.                                                                                             |
-| `-advertise`        | —           | **Required unless `-mode sink`.** The base URL the cluster should dial for pulls, e.g. `http://[2001:db8:3f::1]:9145`. This value, plus `-api-prefix`, is what is stamped into every announcement.                   |
-| `-api-prefix`       | `/api/v1`   | Path prefix the retrieval plane serves on. Must match what the cluster expects: it concatenates the announced base URL with `/subtree/{hash}` verbatim, and its own asset service mounts everything under `/api/v1`. |
+| Flag                | Default     | Value | Description                                                                                                                                                                                                          |
+| ------------------- | ----------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-retrieval-listen` | `[::]:9145` | `[::]:9145` | Bind address for the retrieval HTTP server. Must be reachable from the cluster's subtree- and block-validation services.                                                                                             |
+| `-advertise`        | —           | `http://[2001:db8:3f::1]:9145` | **Required unless `-mode sink`.** Base URL the cluster dials for pulls. This value, plus `-api-prefix`, is stamped into every announcement.                   |
+| `-api-prefix`       | `/api/v1`   | `/api/v1` | Path prefix the retrieval plane serves on. Must match what the cluster expects: it concatenates the announced base URL with `/subtree/{hash}` verbatim, and its own asset service mounts everything under `/api/v1`. |
 
 The announced URL is `strings.TrimRight(advertise, "/") + apiPrefix`. Do **not**
 put the prefix in `-advertise` as well — the result would be a doubled path.
@@ -48,10 +70,10 @@ routable address is the normal arrangement.
 
 ## Cluster ingest targets
 
-| Flag           | Default | Description                                                                                                                                                                              |
-| -------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-propagation` | —       | **Required unless `-mode sink`.** Propagation HTTP base URL(s), e.g. `http://192.0.2.10:20833`. Repeatable and/or comma-separated; multiple endpoints are round-robined per transaction. |
-| `-kafka`       | —       | **Required unless `-mode sink`.** Cluster Kafka broker(s), e.g. `192.0.2.10:19092`. Repeatable and/or comma-separated.                                                                   |
+| Flag           | Default | Value                     | Description                                                                                                              |
+| -------------- | ------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `-propagation` | —       | `http://192.0.2.10:20833` | **Required unless `-mode sink`.** Propagation HTTP base URL(s). Repeatable and/or comma-separated; multiple endpoints are round-robined per transaction. |
+| `-kafka`       | —       | `192.0.2.10:19092`        | **Required unless `-mode sink`.** Cluster Kafka broker(s). Repeatable and/or comma-separated.                             |
 
 Both flags accumulate: `-propagation a,b` and `-propagation a -propagation b`
 are equivalent.
@@ -66,11 +88,11 @@ mis-advertised listener passes the ping and then fails at produce time.
 
 ## Announcements
 
-| Flag             | Default              | Description                                                                                  |
-| ---------------- | -------------------- | -------------------------------------------------------------------------------------------- |
-| `-subtree-topic` | `subtrees-teranode1` | Kafka topic the cluster's subtree validation consumes.                                       |
-| `-block-topic`   | `blocks-teranode1`   | Kafka topic the cluster's block validation consumes.                                         |
-| `-peer-id`       | `""`                 | Peer identity stamped on announcements. **Required unless `-mode sink`** — startup refuses an empty id. **Set a synthetic id** (see below). |
+| Flag             | Default              | Value | Description                                                                                  |
+| ---------------- | -------------------- | ----- | -------------------------------------------------------------------------------------------- |
+| `-subtree-topic` | `subtrees-teranode1` | `subtrees-teranode1` | Kafka topic the cluster's subtree validation consumes.                                       |
+| `-block-topic`   | `blocks-teranode1`   | `blocks-teranode1` | Kafka topic the cluster's block validation consumes.                                         |
+| `-peer-id`       | `""`                 | `12D3KooW…` (synthetic) | **Required unless `-mode sink`** — startup refuses an empty id. Peer identity stamped on announcements; must be a **synthetic id** (see below). |
 
 Both topic names must match the cluster's own configuration; the defaults match
 Teranode's single-node defaults. An announcement produced to a topic nobody
@@ -78,23 +100,19 @@ consumes is silently ineffective — the object is never pulled, never validated
 and only shows up as a growing gap between `announce stats` and
 `retrieval stats`.
 
-> **`-peer-id` must be a SYNTHETIC libp2p id** — a valid-format `12D3KooW…`
+> **`-peer-id` must be a synthetic libp2p id** — a valid-format `12D3KooW…`
 > identity derived from a fresh ed25519 key and registered with no p2p service.
-> This inverts earlier guidance, which said to leave it empty; that guidance was
-> wrong at teranode `1cca625` and caused a verified production-shaped wedge.
 >
-> Why a synthetic id works (both halves verified in the upstream source and by
-> lab drills): the cluster's **catchup** gate treats an _unregistered_ id as
-> unhealthy and diverts chain sync to real libp2p peers, while every
-> **delivery** gate checks only bans and keeps pulling objects from the bridge.
-> The bridge therefore augments the p2p network without ever being asked for the
-> chain itself.
+> A synthetic id separates the two ways the cluster reads the field: the
+> **catchup** gate treats an unregistered id as unhealthy and diverts chain sync
+> to real libp2p peers, while every **delivery** gate checks only bans and keeps
+> pulling objects from the bridge. The bridge therefore augments the p2p network
+> without ever being asked for the chain itself.
 >
-> Why empty is unsafe: catchup substitutes the announce **URL** for a missing
-> id, so the cluster targets the bridge's retrieval plane for
-> `/headers_from_common_ancestor`, gets 404s, opens a circuit breaker on that
-> URL, and locks itself out of recovery. Observed live: a node wedged 300+
-> blocks behind with a healthy peer one hop away.
+> An **empty** id is unsafe: catchup substitutes the announce **URL** for a
+> missing id, targets the bridge's retrieval plane for chain-sync routes it does
+> not serve, and the resulting `404`s open a circuit breaker on that URL —
+> locking the cluster out of recovery.
 >
 > Derivation (any fresh ed25519 key; never reuse a real peer's id): ed25519
 > public key → protobuf `08 01 12 20 ‖ pub` → identity multihash `00 24 ‖ …` →
@@ -102,26 +120,30 @@ and only shows up as a growing gap between `announce stats` and
 >
 > The invariant is monitored, not assumed:
 > `teranode_bridge_retrieval_unserved_route_total{class="chain_sync"}` counts the cluster
-> asking the bridge for chain-sync routes. Rare bursts accompany multi-peer
-> degradation (upstream's cached-alternatives walk skips the divert gate); a
-> sustained rate means the divert has regressed — alarm on it.
+> asking the bridge for chain-sync routes. Rare bursts can accompany multi-peer
+> degradation; a sustained rate means the divert has regressed — alarm on it.
 >
-> Boundary worth knowing: the bridge is an **object source, never a sync
-> source**. A cluster that falls further behind than its announce backlog can
-> only recover through a real libp2p peer; deployments need at least one.
+> The boundary: the bridge is an **object source, never a sync source**. A
+> cluster that falls further behind than its announce backlog can only recover
+> through a real libp2p peer; every deployment needs at least one.
 
 ## Reverse path (cluster → object plane)
 
 Disabled unless `-blockchain` is set. Ignored entirely in `-mode sink`.
 
-| Flag                 | Default | Description                                                                                                                                            |
-| -------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `-blockchain`        | —       | Cluster blockchain gRPC `host:port`, e.g. `192.0.2.10:20087`. Setting it enables the reverse path and **requires** `-local-asset` and `-edge-ingress`. |
-| `-local-asset`       | —       | Cluster asset base URL **including the API prefix**, e.g. `http://192.0.2.10:20090/api/v1`. Used to fetch objects the cluster produced.                |
-| `-edge-ingress`      | —       | Host of the object-plane ingress for upward submits, e.g. `2001:db8:1::1`. Typically reachable only over the delivery link.                            |
-| `-edge-subtree-port` | `8726`  | Ingress port for BRC-143 subtree submits.                                                                                                              |
-| `-edge-block-port`   | `8727`  | Ingress port for BRC-144 block submits.                                                                                                                |
-| `-submitter`         | `true`  | Hold the submitter role on this bridge. Exactly one bridge per cluster should hold it for a given class.                                               |
+| Flag                 | Default | Value | Description                                                                                                                                            |
+| -------------------- | ------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `-blockchain`        | —       | `192.0.2.10:20087` | Cluster blockchain gRPC `host:port`. Setting it enables the reverse path and **requires** `-local-asset` and `-edge-ingress`. |
+| `-local-asset`       | —       | `http://192.0.2.10:20090/api/v1` | Cluster asset base URL **including the API prefix**. Used to fetch objects the cluster produced. |
+| `-edge-ingress`      | —       | `2001:db8:1::1` | Host of the object-plane ingress for upward submits. Typically reachable only over the delivery link. |
+| `-edge-subtree-port` | `9143`  | `9143` | Ingress port for bare BRC-143 subtree submits.                                                                                                         |
+| `-edge-block-port`   | `9144`  | `9144` | Ingress port for bare BRC-144 block submits.                                                                                                           |
+| `-submitter`         | `true`  | `true` | Hold the submitter role on this bridge. Exactly one bridge per cluster should hold it for a given class. |
+
+The submit targets carry the same bare BRC-143/144 payload as the delivery
+lanes, and therefore the same port numbers — only the direction differs. The
+multicast-framed lane numbers `8726`/`8727` are not valid submit targets (see
+[Lane numbers](#lane-numbers)).
 
 The gRPC connection to the blockchain service is **plaintext and
 unauthenticated**. Keep it on a trusted LAN.
@@ -133,9 +155,9 @@ standby bridge a hot spare.
 
 ### Health-gated failover (`-submitter-probe`)
 
-| Flag               | Default | Description                                                                                                                    |
-| ------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `-submitter-probe` | `""`    | The PRIMARY bridge's `/readyz` URL. Set on a **standby** (`-submitter=false`); ignored with a warning on a configured primary. |
+| Flag               | Default | Value | Description                                                                                                                    |
+| ------------------ | ------- | ----- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `-submitter-probe` | `""`    | `http://192.0.2.11:9146/readyz` | The PRIMARY bridge's `/readyz` URL. Set on a **standby** (`-submitter=false`); ignored with a warning on a configured primary. |
 
 The standby probes the primary every 2 s. Five consecutive failures **promote**
 it (it starts publishing, `teranode_bridge_submitter_active` flips to 1, log line
@@ -158,14 +180,14 @@ against a mock sink, with backpressure (a full queue blocks the lane, which
 closes the TCP window) bounding memory when the cluster is slower than the
 fabric.
 
-| Flag              | Default   | Description                                                                        |
-| ----------------- | --------- | ---------------------------------------------------------------------------------- |
-| `-tx-batch`       | `512`     | Transactions per batch (clamped to 1023 — see note).                               |
-| `-tx-batch-bytes` | `8388608` | Batch body ceiling (capped under the server's 32 MiB).                             |
-| `-tx-linger`      | `2ms`     | Max age of a non-full batch — bounds added latency when quiet.                     |
-| `-tx-inflight`    | `4`       | Concurrent batch requests. Throughput ≈ inflight × batch / RTT.                    |
-| `-tx-builders`    | `4`       | Parallel batch builders (power of two, ≤16); txs route to builders by txid.        |
-| `-tx-retries`     | `3`       | Per-tx retries for failures that resolve with time (missing parent). `0` disables. |
+| Flag              | Default   | Value | Description                                                                        |
+| ----------------- | --------- | ----- | ---------------------------------------------------------------------------------- |
+| `-tx-batch`       | `512`     | `512` | Transactions per batch (clamped to 1023 — see note).                               |
+| `-tx-batch-bytes` | `8388608` | `8388608` | Batch body ceiling (capped under the server's 32 MiB).                             |
+| `-tx-linger`      | `2ms`     | `2ms` | Max age of a non-full batch — bounds added latency when quiet.                     |
+| `-tx-inflight`    | `4`       | `4` | Concurrent batch requests. Throughput ≈ inflight × batch / RTT.                    |
+| `-tx-builders`    | `4`       | `4` | Parallel batch builders (power of two, ≤16); txs route to builders by txid.        |
+| `-tx-retries`     | `3`       | `3` | Per-tx retries for failures that resolve with time (missing parent). `0` disables. |
 
 Three contract details worth knowing:
 
@@ -202,9 +224,9 @@ Three contract details worth knowing:
 
 ## Origin detection (`-mine-tag`)
 
-| Flag        | Default | Description                                                    |
-| ----------- | ------- | -------------------------------------------------------------- |
-| `-mine-tag` | `""`    | This cluster's `coinbase_arbitrary_text` (e.g. `/teranode1/`). |
+| Flag        | Default | Value | Description                                                    |
+| ----------- | ------- | ----- | -------------------------------------------------------------- |
+| `-mine-tag` | `""`    | `/teranode1/` | This cluster's `coinbase_arbitrary_text`. |
 
 Blockchain notifications carry no origin, and a block this cluster learned over
 libp2p **before** the fabric delivered it looks unseen — without a check, the
@@ -222,10 +244,10 @@ producer, local block assembly.
 
 ## Cache and duplicate suppression
 
-| Flag           | Default              | Description                                                                                                                                    |
-| -------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-cache-bytes` | `1073741824` (1 GiB) | Byte ceiling **per cache**. Two caches are created — objects (subtrees, blocks) and transactions — so the process ceiling is twice this value. |
-| `-cache-ttl`   | `10m`                | How long a pushed object stays fetchable.                                                                                                      |
+| Flag           | Default              | Value | Description                                                                                                                                    |
+| -------------- | -------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-cache-bytes` | `1073741824` (1 GiB) | `1073741824` | Byte ceiling **per cache**. Two caches are created — objects (subtrees, blocks) and transactions — so the process ceiling is twice this value. |
+| `-cache-ttl`   | `10m`                | `10m` | How long a pushed object stays fetchable.                                                                                                      |
 
 Size the TTL against validation lag, not against retention: this is a cache, not
 a store of record. An entry evicted before the cluster pulls it produces a `404`
@@ -246,15 +268,15 @@ configurable.
 
 ## Process
 
-| Flag            | Default     | Description                                                                                              |
-| --------------- | ----------- | -------------------------------------------------------------------------------------------------------- |
-| `-mode`         | `all`       | `all` = full bridge. `sink` = receive, parse, verify and count only, with no cluster targets.            |
-| `-stats-every`  | `1m`        | Interval between stats blocks. `0` disables periodic stats (a final block is still emitted at shutdown). |
-| `-metrics-addr` | `[::]:9146` | HTTP listener for `/metrics`, `/health*`, `/healthz`, `/readyz`, `/loglevel`, `/debug/pprof`. Empty disables it. |
-| `-log-level`    | `info`      | `debug` \| `info` \| `warn` \| `error`. Runtime-changeable via `POST /loglevel` and `SIGHUP`.            |
-| `-log-format`   | `text`      | `text` (stderr) or `json` (stdout — the fleet aggregation contract).                                     |
-| `-instance-id`  | hostname    | `service.instance.id` shared by logs, metrics and traces, so all three join.                             |
-| `-debug`        | `false`     | Deprecated alias for `-log-level=debug`.                                                                 |
+| Flag            | Default     | Value | Description                                                                                              |
+| --------------- | ----------- | ----- | -------------------------------------------------------------------------------------------------------- |
+| `-mode`         | `all`       | `all` | `all` = full bridge. `sink` = receive, parse, verify and count only, with no cluster targets.            |
+| `-stats-every`  | `1m`        | `1m` | Interval between stats blocks. `0` disables periodic stats (a final block is still emitted at shutdown). |
+| `-metrics-addr` | `[::]:9146` | `[::]:9146` | HTTP listener for `/metrics`, `/health*`, `/healthz`, `/readyz`, `/loglevel`, `/debug/pprof`. Empty disables it. |
+| `-log-level`    | `info`      | `info` | `debug` \| `info` \| `warn` \| `error`. Runtime-changeable via `POST /loglevel` and `SIGHUP`.            |
+| `-log-format`   | `text`      | `json` | `text` (stderr) or `json` (stdout — the fleet aggregation contract).                                     |
+| `-instance-id`  | hostname    | `bridge-a` | `service.instance.id` shared by logs, metrics and traces, so all three join.                             |
+| `-debug`        | `false`     | — | Deprecated alias for `-log-level=debug`.                                                                 |
 
 > **Why `text` is the default here** and `json` elsewhere in the stack: the
 > integration demo parses this binary's log lines with anchored regexes. Set
@@ -321,9 +343,9 @@ names every Teranode metric. The bridge previously used a `btb_` prefix of its
 own, which is off the Teranode grid — a dashboard or recording rule keyed on
 `teranode_` skipped the bridge entirely.
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `-metrics-legacy-prefix` | `true` | Also emit every pre-existing series under `btb_`. Set `false` once dashboards are migrated; scheduled for removal in the release after next. |
+| Flag | Default | Value | Description |
+| --- | --- | --- | --- |
+| `-metrics-legacy-prefix` | `true` | `false` | Also emit every pre-existing series under `btb_`. Set `false` once dashboards are migrated; scheduled for removal in the release after next. |
 
 Metrics introduced with the new naming are **not** aliased.
 
@@ -338,10 +360,10 @@ nothing at all or firing immediately.
 
 ### Latency, size and freshness
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `-tx-size-histogram` | `false` | Observe a per-object size histogram on the **tx** lane. Off by default: the lane bytes counter already gives the mean, and at megatransaction-per-second rates a bucketed observation per object is real work on the read path. The `subtree` and `block` lanes always observe it — their rate is orders of magnitude lower and the distribution is genuinely informative. |
-| `-cluster-poll` | `15s` | How often to read the cluster's FSM state and tip height over the blockchain connection. `0` disables; requires `-blockchain`. Advisory only — the bridge announces and submits identically whatever state the cluster is in. |
+| Flag | Default | Value | Description |
+| --- | --- | --- | --- |
+| `-tx-size-histogram` | `false` | `false` | Observe a per-object size histogram on the **tx** lane. Off by default: the lane bytes counter already gives the mean, and at tx-lane rates a bucketed observation per object is real work on the read path. The `subtree` and `block` lanes always observe it. |
+| `-cluster-poll` | `15s` | `15s` | How often to read the cluster's FSM state and tip height over the blockchain connection. `0` disables; requires `-blockchain`. Advisory only — the bridge announces and submits identically whatever state the cluster is in. |
 
 Histograms use Teranode's bucket sets verbatim, so a bridge series and a cluster
 series bucket identically and can share a panel and a quantile.
@@ -358,12 +380,12 @@ cannot connect at all, and the failure is partial in the worst way. Delivery
 lanes, announce and the retrieval plane keep working; only the reverse path
 dies, as an endless `blockchain subscribe failed, retrying`.
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `-blockchain-security-level` | `0` | Mirrors `security_level_grpc`. See the table below. |
-| `-blockchain-ca-cert` | — | CA that signs the cluster's gRPC server certificate (levels 2–3). |
-| `-blockchain-cert` | — | Client certificate presented to the cluster (levels 2–3). |
-| `-blockchain-key` | — | Private key for `-blockchain-cert` (levels 2–3). |
+| Flag | Default | Value | Description |
+| --- | --- | --- | --- |
+| `-blockchain-security-level` | `0` | `1` | Mirrors `security_level_grpc`. See the table below. |
+| `-blockchain-ca-cert` | — | `/etc/teranode-bridge/ca.pem` | CA that signs the cluster's gRPC server certificate (levels 2–3). |
+| `-blockchain-cert` | — | `/etc/teranode-bridge/client.pem` | Client certificate presented to the cluster (levels 2–3). |
+| `-blockchain-key` | — | `/etc/teranode-bridge/client.key` | Private key for `-blockchain-cert` (levels 2–3). |
 
 | Level | Cluster side | Bridge side |
 | --- | --- | --- |
@@ -396,11 +418,11 @@ the client never learns. Blockchain sends `PING` notifications every 10 s, so
 within seconds; visible is not self-healing, and before this the only recovery
 was restarting the process.
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `-blockchain-keepalive` | `30s` | Ping interval, matching upstream's client default. Must be **≥ the cluster's `grpc_server_min_ping_time_seconds`** (default 30 s) or the server answers `GOAWAY ENHANCE_YOUR_CALM too_many_pings` — which the reconnect loop would retry, turning a liveness mechanism into a ping storm. |
-| `-blockchain-keepalive-timeout` | `20s` | How long to wait for a ping reply before declaring the connection dead. |
-| `-blockchain-keepalive-when-idle` | `true` | Ping with no stream open, matching `grpc_permit_without_stream`. Set `false` if the cluster sets it false. |
+| Flag | Default | Value | Description |
+| --- | --- | --- | --- |
+| `-blockchain-keepalive` | `30s` | `30s` | Ping interval, matching upstream's client default. Must be **≥ the cluster's `grpc_server_min_ping_time_seconds`** (default 30 s) or the server answers `GOAWAY ENHANCE_YOUR_CALM too_many_pings` — which the reconnect loop would retry, turning a liveness mechanism into a ping storm. |
+| `-blockchain-keepalive-timeout` | `20s` | `20s` | How long to wait for a ping reply before declaring the connection dead. |
+| `-blockchain-keepalive-when-idle` | `true` | `true` | Ping with no stream open, matching `grpc_permit_without_stream`. Set `false` if the cluster sets it false. |
 
 grpc-go silently raises any interval below **10 s** to 10 s and logs the change
 through its own logger; the bridge clamps first and warns in its own log, so
@@ -423,11 +445,11 @@ transport closes, `Recv` returns, and the existing reconnect loop takes over.
 Off by default, as upstream. Even when off the W3C propagator is installed, so
 incoming trace context is parsed and forwarded rather than dropped.
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `-tracing-enabled` | `false` | Export OpenTelemetry traces over OTLP/HTTP. |
-| `-tracing-collector-url` | `http://localhost:4318` | Collector endpoint, matching Teranode's `tracing_collector_url`. An `http` scheme selects the insecure exporter. |
-| `-tracing-sample-rate` | `0.01` | Head sampling ratio for root spans, matching Teranode's `tracing_SampleRate`. Child spans inherit the parent decision, so a sampled cluster trace stays sampled across the bridge. |
+| Flag | Default | Value | Description |
+| --- | --- | --- | --- |
+| `-tracing-enabled` | `false` | `true` | Export OpenTelemetry traces over OTLP/HTTP. |
+| `-tracing-collector-url` | `http://localhost:4318` | `http://192.0.2.30:4318` | Collector endpoint, matching Teranode's `tracing_collector_url`. An `http` scheme selects the insecure exporter. |
+| `-tracing-sample-rate` | `0.01` | `0.01` | Head sampling ratio for root spans, matching Teranode's `tracing_SampleRate`. Child spans inherit the parent decision, so a sampled cluster trace stays sampled across the bridge. |
 
 Instrumented boundaries: outbound HTTP to propagation and the asset service,
 outbound gRPC to blockchain, and **inbound HTTP on the retrieval plane** — the
@@ -443,10 +465,10 @@ the bridge does not invent a scheme of its own. See
 pprof rides the metrics listener, the same arrangement Teranode uses for its
 profiler mux.
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `-block-profile-rate` | `0` | `runtime.SetBlockProfileRate`. While `0`, `/debug/pprof/block` returns an **empty** profile rather than an error — which reads as "no contention" during exactly the investigation that needs the opposite answer. |
-| `-mutex-profile-fraction` | `0` | `runtime.SetMutexProfileFraction`, same caveat for `/debug/pprof/mutex`. |
+| Flag | Default | Value | Description |
+| --- | --- | --- | --- |
+| `-block-profile-rate` | `0` | `10000` | `runtime.SetBlockProfileRate`. While `0`, `/debug/pprof/block` returns an **empty** profile rather than an error — which reads as "no contention" during exactly the investigation that needs the opposite answer. |
+| `-mutex-profile-fraction` | `0` | `100` | `runtime.SetMutexProfileFraction`, same caveat for `/debug/pprof/mutex`. |
 
 Both are off by default because neither is free. The chart's NetworkPolicy admits
 `metricsIngressFrom` to the whole metrics port, pprof included — scope it to the
@@ -473,10 +495,13 @@ address) exits `1`.
 
 ## Cluster-side prerequisites
 
-The bridge needs four things reachable on the cluster's LAN. Default ports for a
-standard Teranode deployment:
+The bridge needs four things reachable on the cluster's LAN. Ports vary by
+deployment: a stock cluster listens on the service-native ports (propagation
+HTTP `8833`, Kafka `19092`, asset HTTP `8090`, blockchain gRPC `8087`), while a
+compose-published deployment remaps them onto host ports like the values below.
+Read the real ones from the cluster's own settings:
 
-| Service                   | Default                    | Used for                        |
+| Service                   | Value                      | Used for                        |
 | ------------------------- | -------------------------- | ------------------------------- |
 | Propagation HTTP          | `:20833`                   | `POST /tx`, `GET /health`       |
 | Kafka (external listener) | `:19092`                   | subtree and block announcements |
@@ -602,7 +627,7 @@ they go in the container command (or a chart's `args`).
 ```bash
 docker run --rm \
   -p 8725:8725 -p 9143:9143 -p 9144:9144 -p 9145:9145 \
-  ghcr.io/lightwebinc/teranode-bridge:0.5.0 \
+  ghcr.io/lightwebinc/teranode-bridge:0.7.1 \
     -advertise   'http://[2001:db8:3f::1]:9145' \
     -propagation 'http://192.0.2.10:20833' \
     -kafka       '192.0.2.10:19092'

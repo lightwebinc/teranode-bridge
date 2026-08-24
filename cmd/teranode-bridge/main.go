@@ -85,8 +85,8 @@ func main() {
 		blockchain  = flag.String("blockchain", "", "cluster blockchain gRPC host:port; enables the reverse path (cluster -> fabric)")
 		localAsset  = flag.String("local-asset", "", "cluster asset base URL incl. API prefix, e.g. http://192.0.2.10:20090/api/v1 (reverse path)")
 		edgeIngress = flag.String("edge-ingress", "", "up-tunnel submit host(s), reachable only through the tunnel; comma-separated failover list — with slot identity, the tunnel's side-A and side-B slot inners")
-		subtreePort = flag.Int("edge-subtree-port", 8726, "edge ingress port for BRC-143 subtree submits")
-		blockPort   = flag.Int("edge-block-port", 8727, "edge ingress port for BRC-144 block submits")
+		subtreePort = flag.Int("edge-subtree-port", 9143, "edge ingress port for bare BRC-143 subtree submits")
+		blockPort   = flag.Int("edge-block-port", 9144, "edge ingress port for bare BRC-144 block submits")
 		submitter   = flag.Bool("submitter", true, "hold the submitter role for this cluster; exactly one bridge per class should")
 		submitProbe = flag.String("submitter-probe", "", "primary bridge /readyz URL; set on a STANDBY (-submitter=false) to auto-promote when the primary dies and demote when it returns")
 
