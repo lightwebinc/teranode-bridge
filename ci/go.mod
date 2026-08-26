@@ -2,7 +2,7 @@ module github.com/lightwebinc/teranode-bridge/ci
 
 go 1.26.1
 
-require dagger.io/dagger v0.21.4
+require dagger.io/dagger v0.21.9
 
 require (
 	github.com/99designs/gqlgen v0.17.89 // indirect
