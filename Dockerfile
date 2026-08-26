@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 #
 # Multi-stage Dockerfile for teranode-bridge. Produces a single static binary
 # at /usr/local/bin/teranode-bridge on a distroless nonroot base.
@@ -27,7 +27,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -ldflags "-s -w -X main.Version=${VERSION}" \
         -o /out/teranode-bridge ./cmd/teranode-bridge
 
-FROM gcr.io/distroless/static:nonroot
+FROM gcr.io/distroless/static:nonroot@sha256:1c2c046bc09ed40fad370b599a0b1ae7987f55b01e247cf27a7c27cd97e5bbc7
 USER nonroot:nonroot
 COPY --from=builder /out/ /usr/local/bin/
 # tx / subtree / block delivery lanes, then the retrieval plane.

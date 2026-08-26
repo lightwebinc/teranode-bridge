@@ -23,7 +23,7 @@ name: propbench
 services:
   kafka:
     container_name: propbench-kafka
-    image: redpandadata/redpanda:latest
+    image: redpandadata/redpanda:latest@sha256:468bd13a9f2bd24794cb7fddc867c767fb1008b9a07b297b89fde48c564d7d96
     networks: [propbench]
     command:
       - redpanda start
