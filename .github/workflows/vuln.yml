@@ -24,20 +24,20 @@ jobs:
     name: govulncheck (dagger)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           path: teranode-bridge
 
       # ci/main.go mounts shard-common as a SIBLING (-common=../shard-common) to
       # satisfy the go.mod replace. A scheduled run has no feature branch to
       # match, so it always takes main.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: lightwebinc/shard-common
           ref: main
           path: shard-common
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: teranode-bridge/ci/go.mod
           cache: false
