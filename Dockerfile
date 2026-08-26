@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+# syntax=docker/dockerfile:1.26@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
 #
 # Multi-stage Dockerfile for teranode-bridge. Produces a single static binary
 # at /usr/local/bin/teranode-bridge on a distroless nonroot base.
