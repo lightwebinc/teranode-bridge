@@ -38,8 +38,8 @@ import (
 const (
 	repoName     = "teranode-bridge"
 	commonModule = "github.com/lightwebinc/shard-common"
-	goImage      = "golang:1.26-alpine"
-	lintImage    = "golangci/golangci-lint:v2.12.2-alpine"
+	goImage      = "golang:1.27-alpine"
+	lintImage    = "golangci/golangci-lint:v2.13.2-alpine"
 )
 
 // buildTargets are the package paths to `go build` in the build step. The
@@ -190,11 +190,12 @@ func (p *pipeline) lint(ctx context.Context) error {
 }
 
 func (p *pipeline) vuln(ctx context.Context) error {
-	// Pinned: govulncheck@latest (>=v1.2, via x/tools v0.46.0) panics on Go 1.26
-	// with "ForEachElement called on type containing *types.TypeParam" — a tooling
-	// crash in its SSA analysis, not a vuln. v1.1.4 scans this module cleanly.
+	// Pinned, and the pin tracks the toolchain: v1.1.4 was held here because
+	// >=v1.2 panicked on Go 1.26 ("ForEachElement called on type containing
+	// *types.TypeParam"). On Go 1.27 that inverts — v1.1.4's x/tools is too old
+	// to read 1.27 export data and crashes instead. v1.7.0 scans cleanly.
 	_, err := p.goBase().
-		WithExec([]string{"go", "install", "golang.org/x/vuln/cmd/govulncheck@v1.1.4"}).
+		WithExec([]string{"go", "install", "golang.org/x/vuln/cmd/govulncheck@v1.7.0"}).
 		WithExec([]string{"sh", "-c", "/go/bin/govulncheck ./..."}).
 		Sync(ctx)
 	return err
