@@ -38,8 +38,8 @@ import (
 const (
 	repoName     = "teranode-bridge"
 	commonModule = "github.com/lightwebinc/shard-common"
-	goImage      = "golang:1.26-alpine"
-	lintImage    = "golangci/golangci-lint:v2.12.2-alpine"
+	goImage      = "golang:1.27-alpine"
+	lintImage    = "golangci/golangci-lint:v2.13.2-alpine"
 )
 
 // buildTargets are the package paths to `go build` in the build step. The
