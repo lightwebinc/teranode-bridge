@@ -39,11 +39,3 @@ Two panels have no counterpart anywhere else in the stack:
 Alert rules matching these panels ship in the Helm chart
 (`metrics.prometheusRule.enabled=true`) and are listed in
 [../../docs/references/prometheusMetrics.md](../../docs/references/prometheusMetrics.md#alerting).
-
-## Fleet deployment
-
-This file is byte-identical to
-`1bsv-ops/deploy/charts/observability/dashboards/teranode-bridge.json`, which is
-what the fleet actually installs — as a sidecar-watched ConfigMap on tiers
-running kube-prometheus-stack, and by file provisioning on devnet's metrics VM.
-Change both together.
