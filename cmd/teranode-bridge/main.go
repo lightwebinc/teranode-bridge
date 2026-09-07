@@ -36,17 +36,17 @@ import (
 	"github.com/lightwebinc/teranode-bridge/cache"
 	"github.com/lightwebinc/teranode-bridge/hashid"
 	"github.com/lightwebinc/teranode-bridge/internal/health"
-	"github.com/lightwebinc/teranode-bridge/lanes"
 	"github.com/lightwebinc/teranode-bridge/internal/metrics"
 	"github.com/lightwebinc/teranode-bridge/internal/obs"
+	"github.com/lightwebinc/teranode-bridge/internal/submit"
+	"github.com/lightwebinc/teranode-bridge/internal/tnasset"
+	"github.com/lightwebinc/teranode-bridge/internal/tracing"
+	"github.com/lightwebinc/teranode-bridge/internal/txpipe"
+	"github.com/lightwebinc/teranode-bridge/lanes"
 	"github.com/lightwebinc/teranode-bridge/registry"
 	"github.com/lightwebinc/teranode-bridge/retrieval"
 	"github.com/lightwebinc/teranode-bridge/reverse"
-	"github.com/lightwebinc/teranode-bridge/internal/submit"
-	"github.com/lightwebinc/teranode-bridge/internal/tnasset"
 	"github.com/lightwebinc/teranode-bridge/tnwire"
-	"github.com/lightwebinc/teranode-bridge/internal/tracing"
-	"github.com/lightwebinc/teranode-bridge/internal/txpipe"
 )
 
 // Version is stamped at build time with -ldflags "-X main.Version=…". It is

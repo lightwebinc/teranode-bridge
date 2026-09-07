@@ -24,8 +24,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 
-	"github.com/lightwebinc/teranode-bridge/registry"
 	pb "github.com/lightwebinc/teranode-bridge/proto/blockchain_api"
+	"github.com/lightwebinc/teranode-bridge/registry"
 )
 
 // writeCertPair writes a self-signed cert + key and returns their paths.
