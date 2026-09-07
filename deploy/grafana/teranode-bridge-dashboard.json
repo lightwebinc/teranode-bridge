@@ -33,7 +33,7 @@
     "to": "now"
   },
   "refresh": "30s",
-  "description": "Landing-tier shim for pushed delivery into an unmodified Teranode cluster. Metric names and histogram buckets match Teranode's own, so bridge and cluster series can share a panel. Needs teranode-bridge >= 0.6.0 for the teranode_bridge_* names.",
+  "description": "Landing-tier bridge for pushed delivery into an unmodified Teranode cluster. Metric names and histogram buckets match Teranode's own, so bridge and cluster series can share a panel. Needs teranode-bridge >= 0.6.0 for the teranode_bridge_* names.",
   "templating": {
     "list": [
       {
@@ -964,7 +964,7 @@
     {
       "id": 14,
       "type": "row",
-      "title": "Announce -> pull (the shim)",
+      "title": "Announce -> pull (the announce shim)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
