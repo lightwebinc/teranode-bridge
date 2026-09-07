@@ -57,7 +57,7 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
-	"github.com/lightwebinc/teranode-bridge/internal/hashid"
+	"github.com/lightwebinc/teranode-bridge/hashid"
 	"github.com/lightwebinc/teranode-bridge/internal/obs"
 )
 

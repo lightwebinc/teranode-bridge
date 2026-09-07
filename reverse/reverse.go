@@ -32,10 +32,10 @@ import (
 
 	pb "github.com/lightwebinc/teranode-bridge/proto/blockchain_api"
 
-	"github.com/lightwebinc/teranode-bridge/internal/hashid"
+	"github.com/lightwebinc/teranode-bridge/hashid"
 	"github.com/lightwebinc/teranode-bridge/internal/obs"
-	"github.com/lightwebinc/teranode-bridge/internal/registry"
-	"github.com/lightwebinc/teranode-bridge/internal/tnwire"
+	"github.com/lightwebinc/teranode-bridge/registry"
+	"github.com/lightwebinc/teranode-bridge/tnwire"
 )
 
 // Notification types, mirroring model.NotificationType.
@@ -45,6 +45,10 @@ const (
 )
 
 // Publisher sends an encoded frame up the tunnel.
+//
+// Publisher, Store and Builder are the reverse path's extension seams: an
+// importing module supplies its own transport, published-frame record, or
+// object builder without forking the subscriber loop.
 type Publisher interface {
 	Send(ctx context.Context, obj []byte) error
 }

@@ -30,19 +30,25 @@ import (
 	"github.com/lightwebinc/shard-common/objfmt"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
-	"github.com/lightwebinc/teranode-bridge/internal/cache"
-	"github.com/lightwebinc/teranode-bridge/internal/hashid"
+	"github.com/lightwebinc/teranode-bridge/cache"
+	"github.com/lightwebinc/teranode-bridge/hashid"
 	"github.com/lightwebinc/teranode-bridge/internal/obs"
-	"github.com/lightwebinc/teranode-bridge/internal/tnwire"
+	"github.com/lightwebinc/teranode-bridge/tnwire"
 )
 
 // Store is the read side of the object cache the ingest plane fills.
+//
+// Extension seam: an importing module substitutes any backend here — the OSS
+// bridge wires the in-process cache.Cache; a sibling may plug a replicating or
+// shared store without touching the plane. Implementations must keep the
+// 404-never-200-empty contract the server enforces.
 type Store interface {
 	Get(key cache.Key) (body []byte, class string, ok bool)
 	Has(key cache.Key) bool
 }
 
 // TxStore resolves a transaction by its txid, for serving subtree members.
+// Extension seam, like Store.
 type TxStore interface {
 	Get(key cache.Key) (body []byte, class string, ok bool)
 }

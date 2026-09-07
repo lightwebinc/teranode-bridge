@@ -6,7 +6,7 @@ import (
 	"github.com/lightwebinc/shard-common/hostinfo"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/lightwebinc/teranode-bridge/internal/cache"
+	"github.com/lightwebinc/teranode-bridge/cache"
 )
 
 // Metric naming.

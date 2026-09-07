@@ -13,8 +13,8 @@ import (
 	"github.com/lightwebinc/shard-common/objfmt"
 	dto "github.com/prometheus/client_model/go"
 
-	"github.com/lightwebinc/teranode-bridge/internal/cache"
-	"github.com/lightwebinc/teranode-bridge/internal/hashid"
+	"github.com/lightwebinc/teranode-bridge/cache"
+	"github.com/lightwebinc/teranode-bridge/hashid"
 	"github.com/lightwebinc/teranode-bridge/internal/obs"
 	"time"
 )

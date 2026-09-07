@@ -18,10 +18,10 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
-	"github.com/lightwebinc/teranode-bridge/internal/encode"
-	"github.com/lightwebinc/teranode-bridge/internal/hashid"
+	"github.com/lightwebinc/teranode-bridge/encode"
+	"github.com/lightwebinc/teranode-bridge/hashid"
 	"github.com/lightwebinc/teranode-bridge/internal/obs"
-	"github.com/lightwebinc/teranode-bridge/internal/tnwire"
+	"github.com/lightwebinc/teranode-bridge/tnwire"
 )
 
 // Client fetches from the cluster's asset service.

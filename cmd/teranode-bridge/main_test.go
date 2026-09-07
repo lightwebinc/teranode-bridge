@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lightwebinc/teranode-bridge/internal/cache"
-	"github.com/lightwebinc/teranode-bridge/internal/lanes"
-	"github.com/lightwebinc/teranode-bridge/internal/registry"
+	"github.com/lightwebinc/teranode-bridge/cache"
+	"github.com/lightwebinc/teranode-bridge/lanes"
+	"github.com/lightwebinc/teranode-bridge/registry"
 )
 
 // stdTx is a minimal well-formed BRC-12 standard transaction: one input with an

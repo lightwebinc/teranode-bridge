@@ -70,13 +70,13 @@ so there is no affinity and no per-instance URL bookkeeping.
                                           (Subtree / Block notifications)
 ```
 
-Both directions use the same codecs (`shard-common/objfmt`, `internal/encode`,
-`internal/tnwire`), which is what makes a cluster-produced object re-encode
+Both directions use the same codecs (`shard-common/objfmt`, `encode`,
+`tnwire`), which is what makes a cluster-produced object re-encode
 byte-for-byte identical to one that arrived from the fabric.
 
 ## Ingest — the delivery lanes
 
-`internal/lanes` runs one TCP listener per object class. Each lane carries
+`lanes` runs one TCP listener per object class. Each lane carries
 exactly one class, so the stream is **bare**: no length prefix, no type tag, no
 sync marker. Objects are delimited by walking their own structure, which
 `objfmt.Reader` does:
@@ -197,7 +197,7 @@ long-lived flows across a multi-node cluster or a VIP with no per-object work.
 
 ## Announcing
 
-`internal/announce` produces to the cluster's Kafka with
+`announce` produces to the cluster's Kafka with
 [franz-go](https://github.com/twmb/franz-go), `RequiredAcks=all-ISR`, one
 synchronous produce per object, bounded by a 10 s deadline.
 
@@ -230,7 +230,7 @@ here needs idempotent-producer or transactional semantics.
 
 ## Retrieval plane
 
-`internal/retrieval` implements the subset of the asset API that subtree
+`retrieval` implements the subset of the asset API that subtree
 validation and block validation actually call, and nothing else. Two rules shape
 every handler:
 
@@ -265,7 +265,7 @@ idle.
 
 ## Cache and seen-registry
 
-`internal/cache` is a hash-keyed LRU with a TTL and a total-bytes ceiling, safe
+`cache` is a hash-keyed LRU with a TTL and a total-bytes ceiling, safe
 for concurrent use — ingest writes while retrieval reads. Two independent
 instances are created: one for objects (subtrees and blocks), one for
 transactions. Storing a key that already exists refreshes it and keeps the
@@ -276,7 +276,7 @@ own, after validation. The working set is delivery rate × validation lag —
 seconds of traffic — so eviction is a normal event, not data loss. A pull that
 misses returns `404` and the cluster falls back to its ordinary peer-pull path.
 
-`internal/registry` is a TTL'd set of hashes with the direction each was seen
+`registry` is a TTL'd set of hashes with the direction each was seen
 in. It does two jobs that look similar but are not:
 
 - **Down (delivery)** — suppress re-injection of an object already handed to the
@@ -290,7 +290,7 @@ happens only at the ceiling.
 
 ## Reverse path — cluster to object plane
 
-`internal/reverse` holds a gRPC `Subscribe` on the cluster's blockchain service
+`reverse` holds a gRPC `Subscribe` on the cluster's blockchain service
 and republishes what the cluster produces. `proto/blockchain_api` is a minimal,
 wire-compatible subset of that service: one service, one method, two messages,
 no imports. Only the proto package name, service name, method name and field
@@ -316,7 +316,7 @@ numbers are load-bearing on the wire.
    notification, which is an upstream ask.
 
 3. **Fetch and encode.** `internal/tnasset` pulls the object back out of the
-   cluster's asset service and `internal/encode` builds the push frame.
+   cluster's asset service and `encode` builds the push frame.
    - Subtree: `GET /subtree/{hash}` returns the member hash list; the announced
      hash _is_ the merkle root, so the frame's root field and the identity the
      cluster gave us are the same value — no recomputation, and no chance of
@@ -369,7 +369,7 @@ corrupting data. Either way the object is then dropped as a duplicate.
 
 ## Byte order
 
-Bitcoin hashes exist in two orders, and `internal/hashid` is the only place the
+Bitcoin hashes exist in two orders, and `hashid` is the only place the
 bridge converts between them:
 
 - **Internal (wire) order** — inside frames, subtree node lists, block headers.
@@ -383,7 +383,7 @@ through this one package.
 
 ## Block frame conversion
 
-`internal/tnwire` converts between Teranode's block serialization and the
+`tnwire` converts between Teranode's block serialization and the
 BRC-144 push frame in both directions, deliberately in one file so they cannot
 drift. The two formats carry identical information in identical order and differ
 only in how four counts are written:
@@ -442,19 +442,19 @@ and to isolate object-plane faults from cluster-side ones.
 
 ```
 cmd/teranode-bridge/     entrypoint: flags, wiring, per-class handlers, stats
-internal/lanes/          per-class TCP listeners over bare objfmt streams
+lanes/          per-class TCP listeners over bare objfmt streams
 internal/submit/         tx.go       → propagation HTTP submit + outcome classes
                          uptunnel.go → one long-lived TCP conn per class, upward
 internal/txpipe/         batching tx submit pipeline → POST /txs
-internal/announce/       Kafka {hash, URL, peer_id} producer + wire codec
-internal/cache/          hash-keyed LRU with TTL and byte ceiling
-internal/registry/       TTL'd seen-set with direction (delivered / submitted)
-internal/retrieval/      the asset-API subset the cluster pulls from
+announce/       Kafka {hash, URL, peer_id} producer + wire codec
+cache/          hash-keyed LRU with TTL and byte ceiling
+registry/       TTL'd seen-set with direction (delivered / submitted)
+retrieval/      the asset-API subset the cluster pulls from
 internal/tnasset/        the mirror: pulls objects back out of the cluster
-internal/reverse/        blockchain Subscribe → origin filter → publish upward
-internal/encode/         BRC-143 / BRC-144 push-frame builders (self-verifying)
-internal/tnwire/         BRC-144 ⇄ Teranode block serialization, both directions
-internal/hashid/         internal ⇄ display byte order, in exactly one place
+reverse/        blockchain Subscribe → origin filter → publish upward
+encode/         BRC-143 / BRC-144 push-frame builders (self-verifying)
+tnwire/         BRC-144 ⇄ Teranode block serialization, both directions
+hashid/         internal ⇄ display byte order, in exactly one place
 internal/metrics/        Prometheus collector over Stats() + echo counters
 proto/blockchain_api/    minimal wire-compatible blockchain Subscribe subset
 ```

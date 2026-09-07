@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lightwebinc/teranode-bridge/internal/hashid"
+	"github.com/lightwebinc/teranode-bridge/hashid"
 )
 
 // shortenLadder makes the rate-limit backoff test-fast and restores it after.

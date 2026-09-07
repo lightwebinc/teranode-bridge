@@ -4,7 +4,7 @@ import (
 	"bytes"
 
 	"encoding/binary"
-	"github.com/lightwebinc/teranode-bridge/internal/encode"
+	"github.com/lightwebinc/teranode-bridge/encode"
 	"testing"
 
 	"github.com/lightwebinc/shard-common/objfmt"

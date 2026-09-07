@@ -25,7 +25,7 @@ import (
 
 	"github.com/lightwebinc/shard-common/objfmt"
 
-	"github.com/lightwebinc/teranode-bridge/internal/encode"
+	"github.com/lightwebinc/teranode-bridge/encode"
 )
 
 // ToTeranode rewrites a BRC-144 push frame into Teranode's block serialization.

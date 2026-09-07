@@ -15,7 +15,7 @@ import (
 
 	"github.com/lightwebinc/shard-common/objfmt"
 
-	"github.com/lightwebinc/teranode-bridge/internal/hashid"
+	"github.com/lightwebinc/teranode-bridge/hashid"
 )
 
 // rawTx builds a minimal valid BRC-12 transaction: one input spending prev:0,

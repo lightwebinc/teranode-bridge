@@ -48,6 +48,10 @@ type shard struct {
 }
 
 // Cache is safe for concurrent use: ingest writes while retrieval reads.
+//
+// Its Get/Put/TTL shape is the seam a sibling module substitutes (see
+// retrieval.Store): anything honouring these semantics — including the
+// copy-on-Put rule — can stand in for the in-process implementation.
 type Cache struct {
 	s [shards]*shard
 }
