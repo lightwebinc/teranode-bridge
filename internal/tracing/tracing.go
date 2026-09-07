@@ -14,7 +14,7 @@
 //   - inbound HTTP on the retrieval plane. The cluster's fetch of a subtree or
 //     block happens INSIDE its block-validation span. Without extraction here,
 //     "why was this block slow to validate" dead-ends at the bridge — which is
-//     the single question an operator is most likely to ask of a landing shim.
+//     the single question an operator is most likely to ask of a landing bridge.
 //
 // # Configuration parity
 //

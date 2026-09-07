@@ -8,7 +8,7 @@
 
 > Part of the [**BSV Layered Multicast**](https://github.com/lightwebinc/bsv-multicast) open-source project — see the main repository for the full architecture, design docs, and BRC specifications.
 
-A landing-tier shim for **pushed delivery into an unmodified Teranode cluster**.
+A landing-tier bridge for **pushed delivery into an unmodified Teranode cluster**.
 
 `teranode-bridge` terminates the per-class object delivery lanes on a machine in
 front of a Teranode cluster, hands each object class to the cluster service that
@@ -146,7 +146,7 @@ output carries the same numbers in a stats block every `-stats-every` (60 s).
 The alert that matters is **`teranode_bridge_echo_mismatch_total`** (log line
 `ECHO MISMATCH`): non-zero means the object plane returned different bytes than
 were published — a data-integrity fault, not a delivery hiccup. Two more are
-specific to what a landing shim can get wrong: `teranode_bridge_announce_to_first_pull_seconds`
+specific to what a landing bridge can get wrong: `teranode_bridge_announce_to_first_pull_seconds`
 is the only measurement of whether the announce-shim trick is working at all
 (nothing on either side of the bridge measures it), and
 `sum(teranode_bridge_submitter_active)` must equal exactly 1 per cluster per
@@ -237,7 +237,7 @@ submitter-role scaling rules.
 
 The bridge deliberately does **not** link Teranode's own module. The two contracts
 it needs — a three-field announcement message and a one-method notification
-stream — are reproduced from their wire definitions instead, so a small shim does
+stream — are reproduced from their wire definitions instead, so a small bridge does
 not pull in a full node's dependency tree.
 
 ## License

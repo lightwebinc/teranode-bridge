@@ -515,7 +515,7 @@ func (p *Pipe) subjectTxID(line string) (string, bool) {
 // failure into a throughput collapse. Measured against this cluster:
 // single-transaction retries were 98.9% of propagation's requests and 97.7%
 // of its handler seconds, for a 0.074% recovery yield, and being unbounded
-// they also exhausted the shim's ephemeral ports. Retrying as a batch keeps
+// they also exhausted the bridge's ephemeral ports. Retrying as a batch keeps
 // request count proportional to BATCHES rather than to transactions, and the
 // semaphore bounds what the cluster is asked to hold either way.
 //

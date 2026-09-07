@@ -5,7 +5,7 @@ plane and an **unmodified** Teranode cluster. It terminates the per-class object
 lanes, hands each class to the cluster service that owns it, and — in the other
 direction — publishes what the cluster produces back onto the object plane.
 
-It is a _shim_, not a node: it validates nothing, stores nothing permanently,
+It is a _bridge_, not a node: it validates nothing, stores nothing permanently,
 and holds no chain state. Everything it does is byte movement plus two format
 conversions.
 

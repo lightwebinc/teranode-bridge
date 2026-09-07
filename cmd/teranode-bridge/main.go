@@ -1,4 +1,4 @@
-// Command teranode-bridge is the landing-tier shim for pushed delivery into a
+// Command teranode-bridge is the landing-tier bridge for pushed delivery into a
 // Teranode cluster.
 //
 // It terminates the per-class object delivery lanes, hands transactions to the

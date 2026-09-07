@@ -3,7 +3,7 @@ Copyright 2026 Lightweb Inc. (https://lightweb.net)
 
 =========================================================================
 
-This software is a landing-tier shim that terminates per-class object
+This software is a landing-tier bridge that terminates per-class object
 delivery lanes (transactions, subtrees, blocks) in front of a Teranode
 cluster, hands each object class to the cluster service that owns it, and
 publishes cluster-produced subtrees and blocks back onto the object plane.
