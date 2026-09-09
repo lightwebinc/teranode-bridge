@@ -85,8 +85,16 @@ func main() {
 		blockchain  = flag.String("blockchain", "", "cluster blockchain gRPC host:port; enables the reverse path (cluster -> fabric)")
 		localAsset  = flag.String("local-asset", "", "cluster asset base URL incl. API prefix, e.g. http://192.0.2.10:20090/api/v1 (reverse path)")
 		edgeIngress = flag.String("edge-ingress", "", "up-tunnel submit host(s), reachable only through the tunnel; comma-separated failover list — with slot identity, the tunnel's side-A and side-B slot inners")
-		subtreePort = flag.Int("edge-subtree-port", 9143, "edge ingress port for bare BRC-143 subtree submits")
-		blockPort   = flag.Int("edge-block-port", 9144, "edge ingress port for bare BRC-144 block submits")
+		// 8726/8727, NOT 9143/9144. These name the EDGE PROXY's object ingress,
+		// and the proxy only ever emanates onto the fabric — its lanes are the
+		// fabric's subtree/block numbers whatever transport the submit arrived
+		// over. 9143/9144 are consumer-side numbers: the delivery lanes THIS
+		// bridge listens on (-subtree-listen/-block-listen above), which the
+		// edge dials. Defaulting the submits to 9143/9144 pointed them at ports
+		// nothing in the fabric listens on, and every reverse-path publish went
+		// to a closed port.
+		subtreePort = flag.Int("edge-subtree-port", 8726, "edge proxy ingress port for BRC-143 subtree submits (the fabric lane number)")
+		blockPort   = flag.Int("edge-block-port", 8727, "edge proxy ingress port for BRC-144 block submits (the fabric lane number)")
 		submitter   = flag.Bool("submitter", true, "hold the submitter role for this cluster; exactly one bridge per class should")
 		submitProbe = flag.String("submitter-probe", "", "primary bridge /readyz URL; set on a STANDBY (-submitter=false) to auto-promote when the primary dies and demote when it returns")
 

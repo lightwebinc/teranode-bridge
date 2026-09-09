@@ -31,21 +31,21 @@ the link-facing address, not `[::]`, once the deployment is settled.
 
 ### Lane numbers
 
-Port numbers encode the payload, and the payload is the same in both
-directions:
+Port numbers encode which SIDE of the fabric a lane sits on, so the same
+object class carries two numbers depending on direction:
 
 - **`8725`** is the object plane's transaction class number — the same number an
   edge's open tx ingress uses, applied here to the delivery direction.
-- **`9143`/`9144`** carry **bare BRC-143 subtree / BRC-144 block objects** with
-  no multicast framing — the port number tracks the BRC number. They serve as
-  the bridge's delivery lanes *and* as the object-plane ingress targets for its
-  upward submits (see
-  [Reverse path](#reverse-path-cluster--object-plane)): a bridge only ever
-  sends and receives bare data, so the same numbers apply in both directions.
-- **`8726`/`8727`** are not bridge ports. They denote **multicast-framed**
-  subtree and block lanes — a payload the bridge never produces or accepts, and
-  one the miner-gated ingress does not admit either: a Teranode-side submitter
-  sends only bare data.
+- **`9143`/`9144`** are the **consumer-side** subtree/block lanes: the delivery
+  ports this bridge listens on (`-subtree-listen`/`-block-listen`) and the edge
+  dials. They exist only on the consumer. Nothing in the fabric listens on them.
+- **`8726`/`8727`** are the **fabric-side** subtree/block lanes: the edge
+  PROXY's object ingress. The proxy only ever emanates onto the fabric, so its
+  lanes carry the fabric's numbers whatever transport a submit arrives over —
+  which is why the bridge's upward submits (`-edge-subtree-port`/`-edge-block-port`,
+  see [Reverse path](#reverse-path-cluster--object-plane)) target 8726/8727, not
+  the bridge's own listen numbers. The payload is the same bare BRC-143/144
+  object in both directions; only the side of the fabric differs.
 - Every lane stays clear of a stock cluster's own listen ports, so a bridge can
   share a LAN — or, pod-attached, a network namespace — with Teranode services.
   In particular `8833`, a stock cluster's propagation HTTP port, must not be
@@ -136,14 +136,17 @@ Disabled unless `-blockchain` is set. Ignored entirely in `-mode sink`.
 | `-blockchain`        | —       | `192.0.2.10:20087` | Cluster blockchain gRPC `host:port`. Setting it enables the reverse path and **requires** `-local-asset` and `-edge-ingress`. |
 | `-local-asset`       | —       | `http://192.0.2.10:20090/api/v1` | Cluster asset base URL **including the API prefix**. Used to fetch objects the cluster produced. |
 | `-edge-ingress`      | —       | `2001:db8:1::1` | Host of the object-plane ingress for upward submits. Typically reachable only over the delivery link. |
-| `-edge-subtree-port` | `9143`  | `9143` | Ingress port for bare BRC-143 subtree submits.                                                                                                         |
-| `-edge-block-port`   | `9144`  | `9144` | Ingress port for bare BRC-144 block submits.                                                                                                           |
+| `-edge-subtree-port` | `8726`  | `8726` | Edge PROXY ingress port for BRC-143 subtree submits — the fabric lane number, not this bridge's 9143 listen.                                           |
+| `-edge-block-port`   | `8727`  | `8727` | Edge PROXY ingress port for BRC-144 block submits — the fabric lane number, not this bridge's 9144 listen.                                             |
 | `-submitter`         | `true`  | `true` | Hold the submitter role on this bridge. Exactly one bridge per cluster should hold it for a given class. |
 
-The submit targets carry the same bare BRC-143/144 payload as the delivery
-lanes, and therefore the same port numbers — only the direction differs. The
-multicast-framed lane numbers `8726`/`8727` are not valid submit targets (see
-[Lane numbers](#lane-numbers)).
+The submit targets are the edge proxy's fabric-side lanes, `8726`/`8727`. They
+carry the same bare BRC-143/144 payload as this bridge's delivery lanes, but the
+proxy sits on the fabric side and always feeds the fabric, so it keeps the
+fabric's numbers; `9143`/`9144` belong to the consumer side only and nothing in
+the fabric listens on them (see [Lane numbers](#lane-numbers)). Earlier releases
+defaulted the submits to `9143`/`9144`, which sent every reverse-path publish to
+a closed port — pin these explicitly on any bridge older than this default.
 
 The gRPC connection to the blockchain service is **plaintext and
 unauthenticated**. Keep it on a trusted LAN.
