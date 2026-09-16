@@ -86,7 +86,7 @@ deadline, as Teranode's do.
 | `teranode_bridge_txpipe_enqueued_total` | Counter | Transactions accepted into the pipe. |
 | `teranode_bridge_txpipe_batches_total` | Counter | Batch submissions shipped. |
 | `teranode_bridge_txpipe_batch_seals_total` | Counter | Why batches sealed, by `reason` (`size`, `bytes`, `linger`, `dependency`). |
-| `teranode_bridge_txpipe_retried_total` | Counter | Transactions re-submitted individually after a partial batch failure. |
+| `teranode_bridge_txpipe_retried_total` | Counter | Transactions re-submitted after a partial (`500`) or whole-batch failure — as one further batch under the inflight semaphore, never one request per transaction. |
 | `teranode_bridge_txpipe_retry_accepted_total` | Counter | Retried transactions the cluster then accepted. |
 | `teranode_bridge_txpipe_unattributed_total` | Counter | Error lines naming no batch member. Those transactions' outcome is **unknown** and excluded from `accepted`. |
 | `teranode_bridge_txpipe_rate_limited_total` | Counter | Batches refused by an endpoint's HTTP limiter (429). |

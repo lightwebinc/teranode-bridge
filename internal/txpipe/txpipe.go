@@ -26,8 +26,8 @@
 //   - 200: every transaction in the batch was accepted (or already known).
 //   - 500 "Failed to process transactions": SOME failed; the others were still
 //     processed. The body carries one error line per failure including the
-//     txid, so failures are re-attributed to batch members and retried
-//     individually — missing-parent resolves once the parent lands, which is
+//     txid, so failures are re-attributed to batch members and retried as one
+//     further batch — missing-parent resolves once the parent lands, which is
 //     bounded-retry, not fail-forever.
 //   - 429: the endpoint's rate limiter refused the request before reading it.
 //     No member was processed, but splitting the batch into per-member retries
@@ -381,7 +381,7 @@ func (p *Pipe) submit(ctx context.Context, b *batch) {
 		case status == http.StatusInternalServerError &&
 			strings.HasPrefix(body, "Failed to process transactions"):
 			// Partial failure: the others were processed. Re-attribute the
-			// failed txids from the error lines and retry those individually.
+			// failed txids from the error lines and retry those as one further batch.
 			p.settlePartial(ctx, b, body)
 			return
 
@@ -413,7 +413,7 @@ func (p *Pipe) submit(ctx context.Context, b *batch) {
 		}
 	}
 	// Both endpoints refused the whole batch. Every member is known
-	// undelivered, so salvage them individually rather than writing off n
+	// undelivered, so salvage them as one retry batch rather than writing off n
 	// transactions on one bad request — a batch-shaped fault (an oversized
 	// body, one poisonous member) does not mean the others are unacceptable.
 	if p.cfg.RetryAttempts > 0 {
@@ -610,7 +610,7 @@ func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 // The histogram is labelled by how the round trip ended, because "slow" and
 // "refusing" are different faults with the same counter signature: an endpoint
 // that 429s in a millisecond and one that accepts in two seconds both move
-// btb_txpipe_batches_total at the same rate. Timing is measured around the
+// teranode_bridge_txpipe_batches_total at the same rate. Timing is measured around the
 // whole exchange including the body read, since that is what the caller waits
 // on and what holds an in-flight slot.
 func (p *Pipe) post(ctx context.Context, url string, body []byte) (int, string, error) {

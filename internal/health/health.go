@@ -28,7 +28,7 @@
 //
 // /readyz keeps its old, narrow meaning — every delivery lane is bound — because
 // a standby bridge polls the primary's /readyz to decide whether to promote
-// itself (see internal/reverse.RunPromoter). Folding dependency health into that
+// itself (see reverse.RunPromoter). Folding dependency health into that
 // signal would let a Kafka blip promote a standby while the primary is still
 // publishing, and two submitters is a worse outcome than a late one.
 package health

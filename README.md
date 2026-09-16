@@ -120,15 +120,15 @@ See [docs/configuration.md](docs/configuration.md) for the full flag reference.
 | `9144` | in | block lane (BRC-144 push frames) |
 | `9145` | in | retrieval plane — the cluster's pulls |
 | `9146` | in | `/metrics`, `/health*`, `/healthz`, `/readyz`, `/loglevel`, `/debug/pprof` |
-| `9143` | out | BRC-143 subtree submits to the object-plane ingress |
-| `9144` | out | BRC-144 block submits to the object-plane ingress |
+| `8726` | out | BRC-143 subtree submits to the edge proxy's object ingress (`-edge-subtree-port`) |
+| `8727` | out | BRC-144 block submits to the edge proxy's object ingress (`-edge-block-port`) |
 
-Port numbers track the payload: `8725` is the object plane's transaction class
-number, and `9143`/`9144` carry bare BRC-143/BRC-144 objects — the same numbers
-inbound (delivery) and outbound (upward submits), because a bridge only ever
-handles bare, unframed objects. The multicast-framed subtree/block lanes
-(`8726`/`8727`) are not bridge ports, and every listener stays clear of a stock
-cluster's own service ports.
+Port numbers name the side of the fabric a lane sits on: `8725` is the object
+plane's transaction class number; `9143`/`9144` are the consumer-side
+subtree/block delivery lanes (this bridge listens, the edge dials); `8726`/`8727`
+are the fabric-side lanes on the edge proxy, which the reverse path submits to.
+The payload is the same bare BRC-143/BRC-144 object on both sides, and every
+listener stays clear of a stock cluster's own service ports.
 See [Configuration › Lane numbers](docs/configuration.md#lane-numbers).
 
 ## Observability
@@ -168,8 +168,8 @@ set — the bridge is configured entirely by flags, so pass them as the containe
 command or Helm `args`.
 
 ```bash
-docker build --build-arg VERSION=0.7.1 -t teranode-bridge:0.7.1 .
-docker run --rm teranode-bridge:0.7.1 -mode sink
+docker build --build-arg VERSION=0.9.0 -t teranode-bridge:0.9.0 .
+docker run --rm teranode-bridge:0.9.0 -mode sink
 ```
 
 Published images are gated behind a manual `image-publish` workflow run
@@ -196,38 +196,47 @@ A Kubernetes Helm chart is published from a dedicated chart repository:
 - Repository: [`lightwebinc/teranode-bridge-helm`](https://github.com/lightwebinc/teranode-bridge-helm)
 - OCI: `helm install bridge oci://ghcr.io/lightwebinc/charts/teranode-bridge`
 
-`config.advertise`, `config.propagation` and `config.kafka` are effectively
-required (the chart warns and the bridge exits without them) unless
-`config.mode=sink`. See the chart README for the three-service shape and the
-submitter-role scaling rules.
+`config.advertise`, `config.propagation`, `config.kafka` and `config.peerId` are
+effectively required unless `config.mode=sink`: the chart warns on the first
+three and refuses to install without a peer id, and the bridge exits without any
+of them. See the chart README for the two-service shape and the submitter-role
+scaling rules.
 
 ## Layout
 
 ```
 .
 ├── cmd/teranode-bridge/     # entrypoint: flags, wiring, per-class handlers
+├── lanes/                   # per-class TCP listeners over bare object streams
+├── announce/                # Kafka {hash, URL, peer_id} producer + wire codec
+├── cache/                   # hash-keyed LRU (objects) + generational (txs), TTL + byte ceiling
+├── registry/                # TTL'd seen-set with direction
+├── retrieval/               # the asset-API subset the cluster pulls from
+├── reverse/                 # blockchain Subscribe → origin filter → publish up; TLS, keepalive, promoter
+├── encode/                  # BRC-143 / BRC-144 push-frame builders
+├── tnwire/                  # BRC-144 ⇄ Teranode block serialization
+├── hashid/                  # internal ⇄ display byte order, in one place
 ├── internal/
-│   ├── lanes/               # per-class TCP listeners over bare object streams
-│   ├── submit/              # propagation HTTP submit + upward object submit
+│   ├── submit/              # propagation HTTP submit + upward object submit (UpTunnel)
 │   ├── txpipe/              # batching transaction submit pipeline (POST /txs)
-│   ├── announce/            # Kafka {hash, URL} producer + wire codec
-│   ├── cache/               # hash-keyed LRU with TTL and byte ceiling
-│   ├── registry/            # TTL'd seen-set with direction
-│   ├── retrieval/           # the asset-API subset the cluster pulls from
 │   ├── tnasset/             # the mirror: pulls objects back out of the cluster
-│   ├── reverse/             # blockchain Subscribe → origin filter → publish up
-│   ├── encode/              # BRC-143 / BRC-144 push-frame builders
-│   ├── tnwire/              # BRC-144 ⇄ Teranode block serialization
-│   ├── metrics/             # Prometheus collector over Stats()
-│   └── hashid/              # internal ⇄ display byte order, in one place
+│   ├── health/              # Teranode-shaped /health* dependency checks
+│   ├── obs/                 # histograms, freshness gauges, Kafka producer hooks
+│   ├── metrics/             # Prometheus collector over Stats() + the observability mux
+│   └── tracing/             # OpenTelemetry setup
 ├── proto/blockchain_api/    # minimal wire-compatible Subscribe subset
 ├── ci/                      # Dagger CI driver
+├── deploy/grafana/          # dashboard JSON
 ├── hack/tnbench/            # throughput bench rig (mock propagation + feeder)
-├── docs/                    # architecture + configuration
+├── hack/propbench/          # propagation-only Teranode rig
+├── docs/                    # architecture, configuration, metrics reference, upstream asks
 ├── Dockerfile
 ├── Makefile
-└── .github/workflows/{ci,codeql,image-publish,release}.yml
+└── .github/workflows/{ci,codeql,image-publish,release,vuln}.yml
 ```
+
+The top-level packages are the public extension seams an importing module
+(such as `arcade-bridge`) builds on; `internal/` stays private to this binary.
 
 ## Dependencies
 

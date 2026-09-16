@@ -106,7 +106,8 @@ type Config struct {
 	// UNSAFE: catchup substitutes the announce URL for a missing id, targets
 	// the bridge's retrieval plane for the header chain, 404s, and
 	// circuit-breaks the cluster out of recovery. (Semantics verified at
-	// teranode 1cca625; btb_retrieval_unserved_route_total{class="chain_sync"}
+	// teranode 1cca625;
+	// teranode_bridge_retrieval_unserved_route_total{class="chain_sync"}
 	// is the canary that the divert still holds.)
 	PeerID string
 

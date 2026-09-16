@@ -63,8 +63,8 @@ so there is no affinity and no per-instance URL bookkeeping.
                         plane      POST /subtree/{hash}/txs
                                    GET /block/{hash}
 
-   subtree :9143 ◀─────── reverse ◀── encode BRC-143/144 ◀── GET asset /subtree
-   block   :9144 ◀─────── submit      ▲                      GET asset /block
+   subtree :8726 ◀─────── reverse ◀── encode BRC-143/144 ◀── GET asset /subtree
+   block   :8727 ◀─────── submit      ▲                      GET asset /block
                                       │
                                       └── gRPC Subscribe ◀───── blockchain
                                           (Subtree / Block notifications)
@@ -87,8 +87,9 @@ sync marker. Objects are delimited by walking their own structure, which
 | `subtree` (BRC-143)           | the 40-byte header's `NodeCount`                | `[::]:9143`  |
 | `block` (BRC-144)             | the 104-byte prefix's counts                    | `[::]:9144`  |
 
-Lane numbering — the port number tracks the BRC number, and the same numbers
-carry the same bare payload in both directions — is covered in
+Lane numbering — `9143`/`9144` are the consumer-side delivery lanes this bridge
+listens on, while upward submits target the edge proxy's fabric-side lanes
+`8726`/`8727` with the same bare payload — is covered in
 [Configuration › Lane numbers](configuration.md#lane-numbers).
 
 Anything that writes bare `objfmt` object streams can feed a lane. In the
@@ -338,9 +339,10 @@ numbers are load-bearing on the wire.
    unavoidable echo becomes a free correctness check (below).
 
 5. **Submit.** `internal/submit.UpTunnel` holds one long-lived TCP connection
-   per class to the object-plane ingress (`9143` subtree, `9144` block — the
-   same bare BRC-143/144 lane numbers as delivery, opposite direction). The
-   stream is bare, so a partial write leaves the receiver's
+   per class to the edge proxy's object ingress (`-edge-subtree-port` 8726,
+   `-edge-block-port` 8727 — the fabric-side lane numbers, carrying the same
+   bare BRC-143/144 objects this bridge receives on its consumer-side
+   9143/9144 lanes). The stream is bare, so a partial write leaves the receiver's
    parser mid-object with no way to resynchronise: the only correct recovery is
    to drop the connection and redial, which is what a failed write does.
 
@@ -442,26 +444,33 @@ and to isolate object-plane faults from cluster-side ones.
 
 ```
 cmd/teranode-bridge/     entrypoint: flags, wiring, per-class handlers, stats
-lanes/          per-class TCP listeners over bare objfmt streams
+lanes/                   per-class TCP listeners over bare objfmt streams
+announce/                Kafka {hash, URL, peer_id} producer + wire codec
+cache/                   hash-keyed LRU with TTL and byte ceiling; generational variant for txs
+registry/                TTL'd seen-set with direction (delivered / submitted)
+retrieval/               the asset-API subset the cluster pulls from
+reverse/                 blockchain Subscribe → origin filter → publish upward; TLS, keepalive, promoter
+encode/                  BRC-143 / BRC-144 push-frame builders (self-verifying)
+tnwire/                  BRC-144 ⇄ Teranode block serialization, both directions
+hashid/                  internal ⇄ display byte order, in exactly one place
 internal/submit/         tx.go       → propagation HTTP submit + outcome classes
                          uptunnel.go → one long-lived TCP conn per class, upward
 internal/txpipe/         batching tx submit pipeline → POST /txs
-announce/       Kafka {hash, URL, peer_id} producer + wire codec
-cache/          hash-keyed LRU with TTL and byte ceiling
-registry/       TTL'd seen-set with direction (delivered / submitted)
-retrieval/      the asset-API subset the cluster pulls from
 internal/tnasset/        the mirror: pulls objects back out of the cluster
-reverse/        blockchain Subscribe → origin filter → publish upward
-encode/         BRC-143 / BRC-144 push-frame builders (self-verifying)
-tnwire/         BRC-144 ⇄ Teranode block serialization, both directions
-hashid/         internal ⇄ display byte order, in exactly one place
-internal/metrics/        Prometheus collector over Stats() + echo counters
+internal/health/         Teranode-shaped dependency health (/health*)
+internal/obs/            histograms, freshness gauges, Kafka producer hooks
+internal/metrics/        Prometheus collector over Stats() + echo counters + the observability mux
+internal/tracing/        OpenTelemetry tracing setup
 proto/blockchain_api/    minimal wire-compatible blockchain Subscribe subset
 ```
 
+The top-level packages are the public extension seams; `internal/` is private
+to this binary.
+
 ## Observability
 
-The bridge logs structured lines via `log/slog` (text handler, stdout) and emits
+The bridge logs structured lines via `log/slog` (text handler on stderr by
+default; `-log-format json` writes JSON to stdout) and emits
 a stats block every `-stats-every` (default 60 s, `0` disables):
 
 | Line              | Fields                                                                            |
@@ -470,9 +479,10 @@ a stats block every `-stats-every` (default 60 s, `0` disables):
 | `cache stats`     | `objects`, `object_bytes`, `txs`, `tx_bytes`, `evicted`                           |
 | `registry stats`  | `entries`, `duplicates`                                                           |
 | `submit stats`    | `accepted`, `rejected`, `failed`, `batches`, `retried`, `retry_ok`, `queue`, `seals_dep`, `seals_linger` |
-| `announce stats`  | `subtrees`, `blocks`, `failures`                                                  |
+| `announce stats`  | `subtrees`, `blocks`, `failures`, `buffered`, `awaiting_pull`                     |
 | `retrieval stats` | `subtree`, `subtree_data`, `txs`, `block`, `miss`, `errors`                       |
 | `reverse stats`   | `subtrees_up`, `blocks_up`, `remote_skipped`, `skipped`, `failures`, `reconnects` |
+| `cluster stats`   | `fsm_state`, `height` — once `-cluster-poll` has read the cluster                 |
 | `up-tunnel stats` | per class: `sent`, `bytes`, `failures`, `redials`                                 |
 
 A final stats block is emitted on clean shutdown. `SIGINT`/`SIGTERM` cancels the

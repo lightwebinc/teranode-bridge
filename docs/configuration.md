@@ -139,6 +139,8 @@ Disabled unless `-blockchain` is set. Ignored entirely in `-mode sink`.
 | `-edge-subtree-port` | `8726`  | `8726` | Edge PROXY ingress port for BRC-143 subtree submits — the fabric lane number, not this bridge's 9143 listen.                                           |
 | `-edge-block-port`   | `8727`  | `8727` | Edge PROXY ingress port for BRC-144 block submits — the fabric lane number, not this bridge's 9144 listen.                                             |
 | `-submitter`         | `true`  | `true` | Hold the submitter role on this bridge. Exactly one bridge per cluster should hold it for a given class. |
+| `-submitter-grace`   | `45s`   | `45s` | After start, wait this long before the reverse path may publish. The seen-registry starts empty, so a bridge that publishes immediately can mistake objects the cluster already held for its own. |
+| `-submitter-when-blind` | `false` | `false` | Publish even while no subtree/block delivery lane has a live connection. Unsafe unless this cluster is the only publisher: the origin filter needs a live view of the object plane. |
 
 The submit targets are the edge proxy's fabric-side lanes, `8726`/`8727`. They
 carry the same bare BRC-143/144 payload as this bridge's delivery lanes, but the
@@ -148,8 +150,10 @@ the fabric listens on them (see [Lane numbers](#lane-numbers)). Earlier releases
 defaulted the submits to `9143`/`9144`, which sent every reverse-path publish to
 a closed port — pin these explicitly on any bridge older than this default.
 
-The gRPC connection to the blockchain service is **plaintext and
-unauthenticated**. Keep it on a trusted LAN.
+By default (`-blockchain-security-level 0`) the gRPC connection to the
+blockchain service is **plaintext and unauthenticated**: keep it on a trusted
+LAN, or match the cluster's `security_level_grpc` — see
+[Blockchain connection](#blockchain-connection-transport-security-and-liveness).
 
 With `-submitter=false` the subscriber still connects and still runs its origin
 filter (so `remote_skipped` keeps counting), but it publishes nothing — held
@@ -489,6 +493,7 @@ or to separate object-plane faults from cluster-side ones.
 | `-propagation`                  | required                             | ignored      |
 | `-kafka`                        | required                             | ignored      |
 | `-advertise`                    | required                             | ignored      |
+| `-peer-id`                      | required                             | ignored      |
 | `-blockchain`                   | optional (enables reverse path)      | ignored      |
 | `-local-asset`, `-edge-ingress` | required **if** `-blockchain` is set | ignored      |
 
@@ -630,7 +635,7 @@ they go in the container command (or a chart's `args`).
 ```bash
 docker run --rm \
   -p 8725:8725 -p 9143:9143 -p 9144:9144 -p 9145:9145 \
-  ghcr.io/lightwebinc/teranode-bridge:0.7.1 \
+  ghcr.io/lightwebinc/teranode-bridge:0.9.0 \
     -advertise   'http://[2001:db8:3f::1]:9145' \
     -propagation 'http://192.0.2.10:20833' \
     -kafka       '192.0.2.10:19092'
