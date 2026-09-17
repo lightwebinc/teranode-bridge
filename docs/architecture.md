@@ -132,7 +132,28 @@ announced**: the cluster does not retry a failed subtree fetch, so the bytes
 must be servable the instant the announcement lands.
 
 **Blocks** (`handleBlock`) — the identity is `SHA256d(header[:80])`, exactly as
-the chain identifies a block. Stored, then announced.
+the chain identifies a block. Stored, then announced. A block also names every
+subtree it contains, and those roots are registered as delivered the moment the
+block lands — before the cluster finishes validating it and starts emitting
+subtree notifications — so the reverse path cannot mistake another cluster's
+subtrees for this one's when gossip beats the fabric.
+
+**The announce gate.** Both object handlers gate the announcement on a second
+registry, `announced`, which records only that the cluster has actually been
+**told**. It is separate from the seen-registry on purpose: `seen` answers "has
+this hash crossed the bridge, and which way", and every delivery registers there
+unconditionally because the reverse path's origin filter reads it. Four rules
+follow, and they are pinned by table-driven tests in `cmd/teranode-bridge`:
+
+| Delivery                                          | Announced?                                     |
+| ------------------------------------------------- | ---------------------------------------------- |
+| First one                                         | yes                                            |
+| Redelivery after a **successful** announce        | no — the cluster already knows                 |
+| An object this bridge itself **submitted** upward | no — the cluster produced it; this is the echo |
+| Redelivery after a **failed** announce            | yes, again                                     |
+
+The object is cached either way, because the retrieval plane has to be able to
+serve the pull that a later re-announce provokes.
 
 ## Submitting transactions — the batching pipeline
 
@@ -278,16 +299,36 @@ seconds of traffic — so eviction is a normal event, not data loss. A pull that
 misses returns `404` and the cluster falls back to its ordinary peer-pull path.
 
 `registry` is a TTL'd set of hashes with the direction each was seen
-in. It does two jobs that look similar but are not:
+in. Two instances are created, answering two different questions.
 
-- **Down (delivery)** — suppress re-injection of an object already handed to the
-  cluster. Failover and reconnects legitimately re-deliver.
+`seen` — "has this hash crossed the bridge, and which way?" — does three jobs
+that look similar but are not:
+
+- **Down (delivery)** — suppress re-injection of a transaction already handed to
+  the cluster. Failover and reconnects legitimately re-deliver.
 - **Up (reverse path)** — decide whether a subtree or block the cluster just
-  accepted actually originated here.
+  accepted actually originated here. Anything registered here is remote in
+  origin; anything absent is this cluster's to publish.
+- **Echo** — an object registered as `submitted` is this bridge's own push
+  coming back down the delivery lanes, which is what `verifyEcho` compares and
+  what keeps the cluster from being told about its own output as if it were new.
 
-Entries expire (default 30 minutes, 2²⁰ entries): the question is only
+Because the origin filter reads it, every delivery marks `seen`
+unconditionally — before the announce, and whatever the announce then does.
+
+`announced` — "has the cluster actually been **told** about this object?" — is
+written only by a successful announce (or by a block, for the subtrees it
+carries). Separating it from `seen` is what makes a failed announce self-healing.
+While `seen` was the announce gate, a delivery whose Kafka produce failed was
+still recorded as handled: the produce is synchronous and is not retried, the
+lane counts a handler error and moves on, and every later redelivery returned
+early — so the cluster was never told about an object the bridge held and could
+serve, until the entry aged out and the object happened to arrive again.
+
+Entries expire (30 minutes, 2²⁰ entries, both instances): the question is only
 interesting while an object is in flight. Pruning is bounded — a full sweep
-happens only at the ceiling.
+happens only at the ceiling. Only subtrees and blocks reach `announced`, never
+transactions, so in practice it holds a small fraction of what `seen` does.
 
 ## Reverse path — cluster to object plane
 
@@ -428,11 +469,11 @@ and to isolate object-plane faults from cluster-side ones.
 
 | Failure                                 | Absorbed by                                                                                            |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Delivery link flaps / fails over        | Lanes accept redials; the seen registry drops re-delivered objects; the cache keeps the original bytes |
+| Delivery link flaps / fails over        | Lanes accept redials; the seen registry drops re-delivered transactions and the announce registry drops re-announcements; the cache keeps the original bytes |
 | Malformed object on a lane              | Connection dropped (no resync point exists), `dropped` incremented, sender redials                     |
 | Propagation endpoint down               | Round-robin spreads to the remaining endpoints; the object counts as `failed` and is logged            |
 | Cluster refuses a transaction on merits | `rejected` — not retried; retrying identical bytes cannot change the answer                            |
-| Kafka unreachable                       | `announce failures` increments; the object stays cached until TTL, and the cluster never learns of it  |
+| Kafka unreachable                       | `announce failures` increments; the object stays cached and servable but is **not** recorded as announced, so the next redelivery announces it again |
 | Cache entry evicted before the pull     | Pull answers `404`; the cluster falls back to its ordinary peer announce-and-pull path                 |
 | Asset API rate-limits the reverse path  | Retry ladder; after exhaustion the object is a `failure` and is not published                          |
 | Blockchain stream lost                  | Reconnect with backoff; `reconnects` increments                                                        |
@@ -447,7 +488,7 @@ cmd/teranode-bridge/     entrypoint: flags, wiring, per-class handlers, stats
 lanes/                   per-class TCP listeners over bare objfmt streams
 announce/                Kafka {hash, URL, peer_id} producer + wire codec
 cache/                   hash-keyed LRU with TTL and byte ceiling; generational variant for txs
-registry/                TTL'd seen-set with direction (delivered / submitted)
+registry/                TTL'd seen-set with direction (delivered / submitted); instantiated twice — `seen` and `announced`
 retrieval/               the asset-API subset the cluster pulls from
 reverse/                 blockchain Subscribe → origin filter → publish upward; TLS, keepalive, promoter
 encode/                  BRC-143 / BRC-144 push-frame builders (self-verifying)
@@ -477,7 +518,7 @@ a stats block every `-stats-every` (default 60 s, `0` disables):
 | ----------------- | --------------------------------------------------------------------------------- |
 | `lane stats`      | per lane: `conns`, `objects`, `bytes`, `errors`, `dropped`, `rejected`            |
 | `cache stats`     | `objects`, `object_bytes`, `txs`, `tx_bytes`, `evicted`                           |
-| `registry stats`  | `entries`, `duplicates`                                                           |
+| `registry stats`  | `entries`, `duplicates`, `announced`                                              |
 | `submit stats`    | `accepted`, `rejected`, `failed`, `batches`, `retried`, `retry_ok`, `queue`, `seals_dep`, `seals_linger` |
 | `announce stats`  | `subtrees`, `blocks`, `failures`, `buffered`, `awaiting_pull`                     |
 | `retrieval stats` | `subtree`, `subtree_data`, `txs`, `block`, `miss`, `errors`                       |
@@ -605,8 +646,9 @@ The full metric catalogue is in
 
 ## Resource footprint
 
-Memory is dominated by the two caches (`-cache-bytes` each) plus the seen
-registry (≈ 50 bytes per live hash, bounded at 2²⁰ entries ≈ 50 MiB). Per-lane
+Memory is dominated by the two caches (`-cache-bytes` each) plus the two
+registries (≈ 50 bytes per live hash, each bounded at 2²⁰ entries ≈ 50 MiB;
+`announced` takes no transactions, so it is far smaller in practice). Per-lane
 read buffers grow to at most `-max-object` per open connection. CPU is
 negligible: hashing block headers, walking transaction structures, and two
 count-format conversions.

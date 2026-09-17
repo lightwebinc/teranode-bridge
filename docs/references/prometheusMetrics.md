@@ -74,7 +74,7 @@ deadline, as Teranode's do.
 | `teranode_bridge_cache_misses_total` | Counter | Lookups for an object not held, by `kind`. |
 | `teranode_bridge_cache_evicted_total` | Counter | Objects evicted by the byte ceiling, by `kind`. Expected under load; a problem only when paired with retrieval misses. |
 | `teranode_bridge_cache_expired_total` | Counter | Objects dropped on TTL expiry at lookup, by `kind`. |
-| `teranode_bridge_registry_entries` | Gauge | Hashes in the seen-registry. |
+| `teranode_bridge_registry_entries` | Gauge | Hashes in the **seen**-registry (delivery dedup, origin filter, echo detection). Unchanged in meaning: the separate `announced` registry that gates announcements is not exposed as a series — its size is in the `registry stats` log line. |
 | `teranode_bridge_registry_duplicates_total` | Counter | Objects recognised as already seen. |
 
 ## Transaction pipeline
@@ -97,7 +97,7 @@ deadline, as Teranode's do.
 | Metric Name | Type | Description |
 |-------------|------|-------------|
 | `teranode_bridge_announce_total` | Counter | Announcements produced, by `class` (`subtree`, `block`). |
-| `teranode_bridge_announce_failures_total` | Counter | Announcements that failed to produce. The object stays cached but the cluster never learns of it. |
+| `teranode_bridge_announce_failures_total` | Counter | Announcements that failed to produce. The object stays cached and servable, and is **not** recorded as announced — so the next redelivery of it announces again. A failure the fabric never redelivers is still an object the cluster is not told about. |
 | `teranode_bridge_announce_duration_seconds` | Histogram | Produce-to-ack latency, by `class`. Buckets: `MetricsBucketsMilliSeconds`. |
 | `teranode_bridge_announce_to_first_pull_seconds` | Histogram | **The bridge's own SLI**: from announcement ack to the cluster's first pull of that object, by `class`. Buckets: `MetricsBucketsSeconds`. Nothing on either side of the bridge measures this — the cluster does not know when it was told, the fabric does not know when the cluster acted. A rising p99 means the cache TTL will start evicting objects before they are fetched. |
 | `teranode_bridge_announce_awaiting_pull` | Gauge | Announcements acked but not yet pulled. A level that keeps climbing means announcements land and pulls do not follow. |

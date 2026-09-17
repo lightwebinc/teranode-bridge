@@ -206,6 +206,16 @@ func main() {
 	// graph is what the GC scans. See cache.Generational.
 	txs := cache.NewGenerational(cache.Options{MaxBytes: *cacheBytes, TTL: *cacheTTL})
 	seen := registry.New(30*time.Minute, 1<<20)
+	// What the cluster has actually been TOLD about. Deliberately NOT `seen`:
+	// `seen` records that a hash crossed the bridge (the reverse path's origin
+	// filter and the echo detector both read it), while this records the
+	// announce verdict, and only a successful announce writes to it. That is
+	// what makes a failed announce self-healing — the object is announced again
+	// on the next redelivery instead of sitting cached and invisible. Same TTL
+	// and ceiling as `seen` because it took the announce gate over from it, and
+	// a different window would silently change how long a redelivered object
+	// stays suppressed. Only subtrees and blocks land here, never transactions.
+	announced := registry.New(30*time.Minute, 1<<20)
 
 	var (
 		pipe     *txpipe.Pipe
@@ -213,6 +223,11 @@ func main() {
 		ret      *retrieval.Server
 		baseURL  string
 	)
+	// ann is the same producer behind the handlers' announce seam. It is
+	// assigned only when one is actually built: a nil *announce.Producer stored
+	// in an interface is NOT a nil interface, and the handlers read nil as sink
+	// mode.
+	var ann announcer
 
 	if !sink {
 		if pipe, err = txpipe.New(txpipe.Config{
@@ -241,6 +256,7 @@ func main() {
 			log.Error("kafka producer", "err", err)
 			os.Exit(1)
 		}
+		ann = producer
 		defer producer.Close()
 		producer.SetFirstPull(firstPull)
 		if err := producer.Ping(ctx); err != nil {
@@ -269,14 +285,14 @@ func main() {
 			Name: "subtree", Class: objfmt.ClassSubtree, Addr: *subtreeListen, Log: log, MaxObject: *maxObject,
 			SizeHistogram: true,
 			Handle: func(ctx context.Context, obj []byte) error {
-				return handleSubtree(ctx, obj, objects, seen, producer, baseURL, rec, log)
+				return handleSubtree(ctx, obj, objects, seen, announced, ann, baseURL, rec, log)
 			},
 		},
 		{
 			Name: "block", Class: objfmt.ClassBlock, Addr: *blockListen, Log: log, MaxObject: *maxObject,
 			SizeHistogram: true,
 			Handle: func(ctx context.Context, obj []byte) error {
-				return handleBlock(ctx, obj, objects, seen, producer, baseURL, rec, log)
+				return handleBlock(ctx, obj, objects, seen, announced, ann, baseURL, rec, log)
 			},
 		},
 	}
@@ -413,7 +429,7 @@ func main() {
 				case <-gctx.Done():
 					return nil
 				case <-t.C:
-					logStats(log, laneSet, objects, txs, seen, pipe, producer, ret, rev, upSubtree, upBlock)
+					logStats(log, laneSet, objects, txs, seen, announced, pipe, producer, ret, rev, upSubtree, upBlock)
 				}
 			}
 		})
@@ -423,7 +439,7 @@ func main() {
 		log.Error("bridge stopped", "err", err)
 		os.Exit(1)
 	}
-	logStats(log, laneSet, objects, txs, seen, pipe, producer, ret, rev, upSubtree, upBlock)
+	logStats(log, laneSet, objects, txs, seen, announced, pipe, producer, ret, rev, upSubtree, upBlock)
 	log.Info("bridge stopped")
 }
 
@@ -505,10 +521,34 @@ func probeHealth(ctx context.Context, endpoints []string) error {
 	return lastErr
 }
 
+// announcer is the announce seam the lane handlers publish through:
+// *announce.Producer in production, a stub in tests. A nil announcer is sink
+// mode — receive, verify, cache, tell no one.
+type announcer interface {
+	Subtree(ctx context.Context, displayHash, baseURL string) error
+	Block(ctx context.Context, displayHash, baseURL string) error
+}
+
+var _ announcer = (*announce.Producer)(nil)
+
 // handleSubtree stores the frame and announces it, pointing the cluster at our
 // retrieval plane.
-func handleSubtree(ctx context.Context, obj []byte, objects *cache.Cache, seen *registry.Registry,
-	producer *announce.Producer, baseURL string, rec *metrics.Recorder, log *slog.Logger) error {
+//
+// TWO registries, two questions. `seen` answers "has this hash crossed the
+// bridge, and which way?": it is the reverse path's origin filter and the echo
+// detector, so it is marked on EVERY delivery, unconditionally, whatever the
+// announce does. `announced` answers the narrower "has the cluster actually been
+// TOLD about this object?", and only a successful announce writes to it.
+//
+// Gating the announce on `seen` conflated the two. The announce is synchronous
+// and is not retried; the lane counts a handler error and moves on. So a
+// delivery whose announce FAILED was still recorded as handled, every later
+// redelivery returned early, and the cluster was never told about an object the
+// bridge holds and can serve — until the entry aged out and the object happened
+// to be delivered again. The object is cached either way: the retrieval plane
+// has to be able to serve the pull a later re-announce provokes.
+func handleSubtree(ctx context.Context, obj []byte, objects *cache.Cache, seen, announced *registry.Registry,
+	producer announcer, baseURL string, rec *metrics.Recorder, log *slog.Logger) error {
 
 	if len(obj) < objfmt.SubtreeHeaderSize {
 		return fmt.Errorf("subtree frame too short: %d bytes", len(obj))
@@ -524,20 +564,44 @@ func handleSubtree(ctx context.Context, obj []byte, objects *cache.Cache, seen *
 	verifyEcho(objects, seen, root, "subtree", obj, rec, log)
 	objects.Put(cache.Key(root), "subtree", obj)
 
-	if dir, known := seen.Mark(registry.Key(root), registry.Delivered); known {
-		log.Debug("subtree already seen, not re-announced", "root", root.Display(), "seen_as", dir)
+	// Unconditional, and before the announce gate: the origin filter reads
+	// this, and a delivered hash that is not registered here reads as locally
+	// originated and gets republished up the tunnel.
+	if dir, known := seen.Mark(registry.Key(root), registry.Delivered); known && dir == registry.Submitted {
+		// Our own push coming back down the delivery lanes. The cluster
+		// produced this object; it must not be told about it as if it were new.
+		log.Debug("subtree is our own echo, not announced", "root", root.Display(), "seen_as", dir)
+		return nil
+	}
+	if _, done := announced.Lookup(registry.Key(root)); done {
+		// Lookup, not Mark, because Mark would INSERT an object nobody has been
+		// told about. Mark only on the way out, where it merely refreshes the
+		// entry — so an object the fabric keeps redelivering stays suppressed
+		// for as long as it keeps arriving, exactly as when `seen` was the gate.
+		announced.Mark(registry.Key(root), registry.Delivered)
+		log.Debug("subtree already announced, not re-announced", "root", root.Display())
 		return nil
 	}
 	log.Info("subtree received", "root", root.Display(), "nodes", nodes, "bytes", len(obj))
 	if producer == nil {
+		// Sink mode: there is nobody to tell, so the object is fully handled.
+		// Recorded so redelivery is as quiet as it is on an announcing bridge.
+		announced.Mark(registry.Key(root), registry.Delivered)
 		return nil
 	}
-	return producer.Subtree(ctx, root.Display(), baseURL)
+	if err := producer.Subtree(ctx, root.Display(), baseURL); err != nil {
+		return err
+	}
+	// Direction is meaningless in this registry — it holds one fact, "the
+	// cluster has been told" — so every entry uses Delivered.
+	announced.Mark(registry.Key(root), registry.Delivered)
+	return nil
 }
 
-// handleBlock stores the frame and announces it.
-func handleBlock(ctx context.Context, obj []byte, objects *cache.Cache, seen *registry.Registry,
-	producer *announce.Producer, baseURL string, rec *metrics.Recorder, log *slog.Logger) error {
+// handleBlock stores the frame and announces it. Announce-failure handling is
+// handleSubtree's: cached either way, recorded as announced only on success.
+func handleBlock(ctx context.Context, obj []byte, objects *cache.Cache, seen, announced *registry.Registry,
+	producer announcer, baseURL string, rec *metrics.Recorder, log *slog.Logger) error {
 
 	if len(obj) < objfmt.BlockPrefixSize {
 		return fmt.Errorf("block frame too short: %d bytes", len(obj))
@@ -556,27 +620,47 @@ func handleBlock(ctx context.Context, obj []byte, objects *cache.Cache, seen *re
 	// gossip wins the race. The block itself is covered by the mine tag; its
 	// subtrees have no such marker of their own, so they inherit the block's.
 	// Mark never downgrades an existing entry, so our own echo is unaffected.
+	//
+	// The roots are marked in BOTH registries, which keeps a block-contained
+	// subtree suppressed on the subtree lane exactly as it was before the two
+	// registries were split. `seen` is the origin filter. `announced` is a
+	// deliberate claim too: the cluster learns of these subtrees from the block
+	// that contains them and fetches them while validating it, so a copy
+	// arriving afterwards on the subtree lane is not news. If the block's own
+	// announce fails, the block is re-announced on its next redelivery and
+	// carries its subtrees with it — the same self-healing path, one level up.
 	if roots, err := tnwire.SubtreeRootsOf(obj); err == nil {
 		for _, r := range roots {
 			seen.Mark(registry.Key(r), registry.Delivered)
+			announced.Mark(registry.Key(r), registry.Delivered)
 		}
 	} else {
 		log.Warn("could not read subtree roots from block frame", "hash", id.Display(), "err", err)
 	}
 
-	if dir, known := seen.Mark(registry.Key(id), registry.Delivered); known {
-		log.Debug("block already seen, not re-announced", "hash", id.Display(), "seen_as", dir)
+	if dir, known := seen.Mark(registry.Key(id), registry.Delivered); known && dir == registry.Submitted {
+		log.Debug("block is our own echo, not announced", "hash", id.Display(), "seen_as", dir)
+		return nil
+	}
+	if _, done := announced.Lookup(registry.Key(id)); done {
+		announced.Mark(registry.Key(id), registry.Delivered) // refresh; see handleSubtree
+		log.Debug("block already announced, not re-announced", "hash", id.Display())
 		return nil
 	}
 	log.Info("block received", "hash", id.Display(), "bytes", len(obj))
 	if producer == nil {
+		announced.Mark(registry.Key(id), registry.Delivered)
 		return nil
 	}
-	return producer.Block(ctx, id.Display(), baseURL)
+	if err := producer.Block(ctx, id.Display(), baseURL); err != nil {
+		return err
+	}
+	announced.Mark(registry.Key(id), registry.Delivered)
+	return nil
 }
 
 func logStats(log *slog.Logger, laneSet []*lanes.Lane, objects *cache.Cache, txs *cache.Generational,
-	seen *registry.Registry, pipe *txpipe.Pipe, producer *announce.Producer, ret *retrieval.Server,
+	seen, announced *registry.Registry, pipe *txpipe.Pipe, producer *announce.Producer, ret *retrieval.Server,
 	rev *reverse.Subscriber, upSubtree, upBlock *submit.UpTunnel) {
 
 	for _, l := range laneSet {
@@ -588,7 +672,10 @@ func logStats(log *slog.Logger, laneSet []*lanes.Lane, objects *cache.Cache, txs
 	log.Info("cache stats", "objects", objStats.Entries, "object_bytes", objStats.Bytes,
 		"txs", txStats.Entries, "tx_bytes", txStats.Bytes, "evicted", objStats.Evicted+txStats.Evicted)
 	rs := seen.Stats()
-	log.Info("registry stats", "entries", rs.Entries, "duplicates", rs.Hits)
+	// `announced` is the announce gate: entries well below the object count
+	// mean announces are failing and being retried on redelivery.
+	log.Info("registry stats", "entries", rs.Entries, "duplicates", rs.Hits,
+		"announced", announced.Stats().Entries)
 	if pipe != nil {
 		s := pipe.Stats()
 		log.Info("submit stats", "accepted", s.Accepted, "rejected", s.Rejected,

@@ -122,7 +122,7 @@ var (
 	announceTotal = newPair("announce_total",
 		"Announcements produced to the cluster's Kafka, by object class.", []string{"class"})
 	announceFailures = newPair("announce_failures_total",
-		"Announcements that failed to produce. The object stays cached but the cluster never learns of it.", nil)
+		"Announcements that failed to produce. The object stays cached and servable and is not recorded as announced, so its next redelivery announces it again.", nil)
 	announceBuffered = newModern("kafka_producer_buffered_records",
 		"Records the Kafka client still holds unproduced. A sustained non-zero level is an announce BACKLOG — objects the cluster has not been told about yet, which no failure counter reports.", nil)
 	announceAwaitingPull = newModern("announce_awaiting_pull",

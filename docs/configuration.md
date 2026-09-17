@@ -269,9 +269,13 @@ payload in heap and collapses into continuous GC. Entry lifetime is between
 TTL/2 and TTL — a recency window, which is exactly the subtree_data fallback's
 need. The subtree/block cache keeps precise LRU+TTL semantics.
 
-The seen-registry (duplicate suppression and the reverse path's origin filter)
-is generational the same way: 30-minute nominal TTL, 2²⁰ entries; not currently
-configurable.
+The seen-registry (duplicate suppression, the reverse path's origin filter and
+echo detection) is generational the same way: 30-minute nominal TTL, 2²⁰
+entries; not currently configurable. A second registry with the same settings
+records which objects the cluster has actually been **told** about, and only a
+successful announce writes to it — which is what makes a failed announce
+re-announce on the next redelivery instead of leaving the object cached and
+invisible.
 
 ## Process
 
@@ -655,10 +659,11 @@ anomaly points at:
 |                   | `errors`           | `0`              | Per-object handler failures; the paired `submit`/`announce` line says which                                                        |
 |                   | `rejected`         | `0`              | Objects refused on lane format policy — on `tx`, a sender emitting BRC-12 standard transactions instead of BRC-30 EF               |
 | `registry stats`  | `duplicates`       | small            | Re-delivery of an object already handed over — expected after a failover or reconnect; sustained growth means the delivery side is re-sending |
+|                   | `announced`        | tracks subtrees + blocks | Objects the cluster has been told about. Well below the subtree+block count delivered in the last 30 min means announces are failing and being retried on redelivery — read it with `announce stats failures` |
 | `submit stats`    | `accepted`         | rising           | —                                                                                                                                  |
 |                   | `rejected`         | `0`              | The cluster refuses these on merits — missing parents, invalid, frozen. Not retryable                                              |
 |                   | `failed`           | `0`              | Propagation unreachable or erroring                                                                                                |
-| `announce stats`  | `failures`         | `0`              | Kafka unreachable, topic missing, or a mis-advertised broker listener                                                              |
+| `announce stats`  | `failures`         | `0`              | Kafka unreachable, topic missing, or a mis-advertised broker listener. The objects stay cached and unrecorded, so each is re-announced on its next redelivery |
 |                   | `buffered`         | `0`              | Records the Kafka client still holds unproduced. A sustained non-zero level is a **backlog**, not a failure — the cluster has not been told about those objects yet, and no failure counter reports it |
 |                   | `awaiting_pull`    | small            | Announcements acked but not yet pulled. Climbing means announcements land and pulls do not follow                                  |
 | `retrieval stats` | `subtree`, `block` | tracks announces | A flat count against a rising `announce` means the cluster is not pulling — check `-advertise`, `-api-prefix`, and the topic names |
@@ -691,6 +696,7 @@ Fixed values, listed so they are not mistaken for flags:
 | Value                          | Setting                                         |
 | ------------------------------ | ----------------------------------------------- |
 | Seen-registry TTL / capacity   | 30 min / 2²⁰ entries                            |
+| Announce-registry TTL / capacity | 30 min / 2²⁰ entries (subtrees and blocks only) |
 | Propagation HTTP timeout       | 30 s; 32 idle conns per host, 90 s idle timeout |
 | Kafka produce timeout          | 10 s, `RequiredAcks=all-ISR`                    |
 | Asset fetch timeout            | 30 s                                            |
