@@ -34,8 +34,8 @@ github.com/klauspost/compress v1.19.1 h1:VsB4HPswih7mmZ8WleSFQ75c/Ui1M4trX5oAsJn
 github.com/klauspost/compress v1.19.1/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
 github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0SNc=
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
-github.com/lightwebinc/shard-common v0.19.2 h1:SevLAd2WD7UMZbNYT0QYnwrl4MMIWUK/wUnGFZWfQrw=
-github.com/lightwebinc/shard-common v0.19.2/go.mod h1:y6mYFNiPNCRERt1QpqUAnpq0Hr8mlFGJ+V5GipaGttw=
+github.com/lightwebinc/shard-common v0.20.0 h1:atHkxHEzOWhgkpjNO1UjitfM89ndAMzt1D8AAHxnAZc=
+github.com/lightwebinc/shard-common v0.20.0/go.mod h1:5fREuv1KmRZpBzO1JEewWgV7HJTqhrHMUg32IJuuUJ0=
 github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 h1:6E+4a0GO5zZEnZ81pIr0yLvtUWk2if982qA3F3QD6H4=
 github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0/go.mod h1:zJYVVT2jmtg6P3p1VtQj7WsuWi/y4VnjVBn7F8KPB3I=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=

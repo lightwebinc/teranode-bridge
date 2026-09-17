@@ -30,6 +30,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM gcr.io/distroless/static:nonroot@sha256:1c2c046bc09ed40fad370b599a0b1ae7987f55b01e247cf27a7c27cd97e5bbc7
 USER nonroot:nonroot
 COPY --from=builder /out/ /usr/local/bin/
-# tx / subtree / block delivery lanes, then the retrieval plane.
-EXPOSE 8725 9143 9144 9145
+# tx / subtree / block delivery lanes, the retrieval plane, then the metrics
+# and health listener (-metrics-addr, which also serves /health*).
+EXPOSE 8725 9143 9144 9145 9146
 ENTRYPOINT ["/usr/local/bin/teranode-bridge"]

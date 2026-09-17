@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.1.0
-	github.com/lightwebinc/shard-common v0.19.2
+	github.com/lightwebinc/shard-common v0.20.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.3
 	github.com/twmb/franz-go v1.21.6
