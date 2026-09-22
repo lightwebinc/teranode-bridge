@@ -103,7 +103,7 @@ func (k set) Collect(ch chan<- prometheus.Metric) {
 // histogram would quietly bias it downward.
 const produceAPIKey int16 = 0
 
-// KafkaHook implements the franz-go hook interfaces that carry produce-path
+// Hook implements the franz-go hook interfaces that carry produce-path
 // measurements:
 //
 //   - kgo.HookBrokerConnect
@@ -113,7 +113,6 @@ const produceAPIKey int16 = 0
 //   - kgo.HookProduceBatchWritten
 type Hook struct{}
 
-// NewKafkaHook returns the hook to pass to kgo.WithHooks.
 // NewHook returns a franz-go hook that feeds these metrics.
 func NewHook() *Hook { return &Hook{} }
 
