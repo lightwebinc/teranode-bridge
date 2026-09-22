@@ -1,9 +1,22 @@
-package obs
+// Package kafka holds the Kafka client instrumentation.
+//
+// It is a package of its own so that importing the observability package does
+// NOT link a Kafka client. The lane terminator in ./lanes is imported by
+// sibling bridges that speak no Kafka at all, and a shared observability
+// package carrying kgo put nine Kafka packages into each of their binaries:
+// build weight, dependency-scanner findings against unreachable code, and a
+// third-party attribution obligation for software those binaries never call.
+//
+// Register these collectors alongside the observability package's own; they
+// are deliberately not folded into that package's Collectors, because doing so
+// would re-create the dependency this split exists to remove.
+package kafka
 
 import (
 	"net"
 	"time"
 
+	"github.com/lightwebinc/teranode-bridge/internal/obs"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -18,51 +31,52 @@ import (
 // only moves once produce actually fails, while a producer that is merely
 // falling behind shows nothing at all — and a subtree the cluster is never told
 // about is exactly as lost as one that failed to send.
-const kafkaSubsystem = "bridge_kafka_producer"
+const subsystem = "bridge_kafka_producer"
 
-func kafkaHist(name, help string, buckets []float64) prometheus.Histogram {
+func hist(name, help string, buckets []float64) prometheus.Histogram {
 	return prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: Namespace, Subsystem: kafkaSubsystem,
+		Namespace: obs.Namespace, Subsystem: subsystem,
 		Name: name, Help: help, Buckets: buckets,
 	})
 }
 
-func kafkaCounter(name, help string) prometheus.Counter {
+func counter(name, help string) prometheus.Counter {
 	return prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: Namespace, Subsystem: kafkaSubsystem, Name: name, Help: help,
+		Namespace: obs.Namespace, Subsystem: subsystem, Name: name, Help: help,
 	})
 }
 
 var (
-	kafkaBytesWritten = kafkaCounter("bytes_written_total",
+	kafkaBytesWritten = counter("bytes_written_total",
 		"Bytes written to Kafka brokers.")
-	kafkaWriteDuration = kafkaHist("write_duration_seconds",
-		"Time spent in conn.Write for a produce request.", BucketsMilliSeconds)
-	kafkaWriteErrors = kafkaCounter("write_errors_total",
+	kafkaWriteDuration = hist("write_duration_seconds",
+		"Time spent in conn.Write for a produce request.", obs.BucketsMilliSeconds)
+	kafkaWriteErrors = counter("write_errors_total",
 		"Broker write errors encountered during produce.")
-	kafkaE2EDuration = kafkaHist("e2e_duration_seconds",
-		"End-to-end time from writing a produce request to reading its response.", BucketsMilliLongSeconds)
-	kafkaProduceLatency = kafkaHist("produce_request_latency_seconds",
-		"Produce request latency including the wait before the write.", BucketsMilliLongSeconds)
-	kafkaBatchRecords = kafkaCounter("batch_records_total",
+	kafkaE2EDuration = hist("e2e_duration_seconds",
+		"End-to-end time from writing a produce request to reading its response.", obs.BucketsMilliLongSeconds)
+	kafkaProduceLatency = hist("produce_request_latency_seconds",
+		"Produce request latency including the wait before the write.", obs.BucketsMilliLongSeconds)
+	kafkaBatchRecords = counter("batch_records_total",
 		"Records successfully produced in batches.")
-	kafkaBatchCompressed = kafkaCounter("batch_compressed_bytes_total",
+	kafkaBatchCompressed = counter("batch_compressed_bytes_total",
 		"Compressed bytes of successfully produced batches.")
-	kafkaBrokerConnects = kafkaCounter("broker_connects_total",
+	kafkaBrokerConnects = counter("broker_connects_total",
 		"Successful broker connections opened.")
-	kafkaBrokerDisconnects = kafkaCounter("broker_disconnects_total",
+	kafkaBrokerDisconnects = counter("broker_disconnects_total",
 		"Broker connections closed. A climbing rate with a flat produce rate means the brokers are cycling us.")
-	kafkaConnectErrors = kafkaCounter("connect_errors_total",
+	kafkaConnectErrors = counter("connect_errors_total",
 		"Failed broker dials.")
 )
 
-func kafkaCollectors() prometheus.Collector { return kafkaSet{} }
+// Collectors returns the Kafka client metrics.
+func Collectors() prometheus.Collector { return set{} }
 
 // kafkaSet bundles the producer metrics as one collector so [Collectors] stays
 // a flat list.
-type kafkaSet struct{}
+type set struct{}
 
-func (kafkaSet) each() []prometheus.Collector {
+func (set) each() []prometheus.Collector {
 	return []prometheus.Collector{
 		kafkaBytesWritten, kafkaWriteDuration, kafkaWriteErrors,
 		kafkaE2EDuration, kafkaProduceLatency, kafkaBatchRecords,
@@ -71,13 +85,13 @@ func (kafkaSet) each() []prometheus.Collector {
 	}
 }
 
-func (k kafkaSet) Describe(ch chan<- *prometheus.Desc) {
+func (k set) Describe(ch chan<- *prometheus.Desc) {
 	for _, c := range k.each() {
 		c.Describe(ch)
 	}
 }
 
-func (k kafkaSet) Collect(ch chan<- prometheus.Metric) {
+func (k set) Collect(ch chan<- prometheus.Metric) {
 	for _, c := range k.each() {
 		c.Collect(ch)
 	}
@@ -97,13 +111,14 @@ const produceAPIKey int16 = 0
 //   - kgo.HookBrokerWrite
 //   - kgo.HookBrokerE2E
 //   - kgo.HookProduceBatchWritten
-type KafkaHook struct{}
+type Hook struct{}
 
 // NewKafkaHook returns the hook to pass to kgo.WithHooks.
-func NewKafkaHook() *KafkaHook { return &KafkaHook{} }
+// NewHook returns a franz-go hook that feeds these metrics.
+func NewHook() *Hook { return &Hook{} }
 
 // OnBrokerConnect implements kgo.HookBrokerConnect.
-func (*KafkaHook) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
+func (*Hook) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
 	if err != nil {
 		kafkaConnectErrors.Inc()
 		return
@@ -112,12 +127,12 @@ func (*KafkaHook) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.C
 }
 
 // OnBrokerDisconnect implements kgo.HookBrokerDisconnect.
-func (*KafkaHook) OnBrokerDisconnect(_ kgo.BrokerMetadata, _ net.Conn) {
+func (*Hook) OnBrokerDisconnect(_ kgo.BrokerMetadata, _ net.Conn) {
 	kafkaBrokerDisconnects.Inc()
 }
 
 // OnBrokerWrite implements kgo.HookBrokerWrite.
-func (*KafkaHook) OnBrokerWrite(_ kgo.BrokerMetadata, key int16, bytesWritten int,
+func (*Hook) OnBrokerWrite(_ kgo.BrokerMetadata, key int16, bytesWritten int,
 	_, timeToWrite time.Duration, err error) {
 
 	if key != produceAPIKey {
@@ -131,7 +146,7 @@ func (*KafkaHook) OnBrokerWrite(_ kgo.BrokerMetadata, key int16, bytesWritten in
 }
 
 // OnBrokerE2E implements kgo.HookBrokerE2E.
-func (*KafkaHook) OnBrokerE2E(_ kgo.BrokerMetadata, key int16, e2e kgo.BrokerE2E) {
+func (*Hook) OnBrokerE2E(_ kgo.BrokerMetadata, key int16, e2e kgo.BrokerE2E) {
 	if key != produceAPIKey {
 		return
 	}
@@ -143,15 +158,15 @@ func (*KafkaHook) OnBrokerE2E(_ kgo.BrokerMetadata, key int16, e2e kgo.BrokerE2E
 }
 
 // OnProduceBatchWritten implements kgo.HookProduceBatchWritten.
-func (*KafkaHook) OnProduceBatchWritten(_ kgo.BrokerMetadata, _ string, _ int32, m kgo.ProduceBatchMetrics) {
+func (*Hook) OnProduceBatchWritten(_ kgo.BrokerMetadata, _ string, _ int32, m kgo.ProduceBatchMetrics) {
 	kafkaBatchRecords.Add(float64(m.NumRecords))
 	kafkaBatchCompressed.Add(float64(m.CompressedBytes))
 }
 
 var (
-	_ kgo.HookBrokerConnect       = (*KafkaHook)(nil)
-	_ kgo.HookBrokerDisconnect    = (*KafkaHook)(nil)
-	_ kgo.HookBrokerWrite         = (*KafkaHook)(nil)
-	_ kgo.HookBrokerE2E           = (*KafkaHook)(nil)
-	_ kgo.HookProduceBatchWritten = (*KafkaHook)(nil)
+	_ kgo.HookBrokerConnect       = (*Hook)(nil)
+	_ kgo.HookBrokerDisconnect    = (*Hook)(nil)
+	_ kgo.HookBrokerWrite         = (*Hook)(nil)
+	_ kgo.HookBrokerE2E           = (*Hook)(nil)
+	_ kgo.HookProduceBatchWritten = (*Hook)(nil)
 )

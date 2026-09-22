@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 
 	"github.com/lightwebinc/teranode-bridge/internal/obs"
+	"github.com/lightwebinc/teranode-bridge/internal/obs/kafka"
 )
 
 // Message is the common shape of KafkaSubtreeTopicMessage and
@@ -145,7 +146,7 @@ func New(cfg Config, log *slog.Logger) (*Producer, error) {
 		// actually fails, while a producer merely falling behind reports
 		// nothing — and an object the cluster is never told about is as lost
 		// as one that failed to send.
-		kgo.WithHooks(obs.NewKafkaHook()),
+		kgo.WithHooks(kafka.NewHook()),
 		// The consumers are ordinary Kafka consumers; nothing here needs
 		// transactions or idempotent producer semantics — a duplicate announce
 		// is harmless because the cluster dedups by hash.

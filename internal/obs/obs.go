@@ -188,7 +188,9 @@ func Since(h *prometheus.HistogramVec, start time.Time, labels ...string) {
 }
 
 // Collectors returns everything this package owns, for registration into the
-// bridge's registry. Series with labels are absent until first use; the ones
+// bridge's registry. The Kafka client metrics live in ./kafka and are
+// registered separately: folding them in here would make every importer of
+// this package link a Kafka client, which is what that split exists to avoid. Series with labels are absent until first use; the ones
 // that must be present at zero for an alert to be meaningful are pre-created by
 // [Preset].
 func Collectors() []prometheus.Collector {
@@ -197,7 +199,6 @@ func Collectors() []prometheus.Collector {
 		AnnounceToFirstPull, UpTunnelWriteDuration, ObjectBytes,
 		LastObjectTime, LastAnnounceTime, LastPullTime, LastSubmitTime, LastNotificationTime,
 		ClusterFSMState, ClusterFSMStateInfo, ClusterBlockHeight, ClusterProbeErrors,
-		kafkaCollectors(),
 	}
 }
 

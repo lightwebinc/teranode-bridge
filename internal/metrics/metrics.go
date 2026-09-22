@@ -52,6 +52,7 @@ import (
 	"github.com/lightwebinc/teranode-bridge/cache"
 	"github.com/lightwebinc/teranode-bridge/internal/health"
 	"github.com/lightwebinc/teranode-bridge/internal/obs"
+	"github.com/lightwebinc/teranode-bridge/internal/obs/kafka"
 	"github.com/lightwebinc/teranode-bridge/internal/submit"
 	"github.com/lightwebinc/teranode-bridge/internal/txpipe"
 	"github.com/lightwebinc/teranode-bridge/lanes"
@@ -144,6 +145,10 @@ func New(opts Options) *Recorder {
 		&collector{rec: r},
 	)
 	r.reg.MustRegister(obs.Collectors()...)
+	// Registered separately from obs.Collectors on purpose: the Kafka client
+	// metrics live in their own package so that importing the observability
+	// package does not link a Kafka client into a bridge that speaks none.
+	r.reg.MustRegister(kafka.Collectors())
 	return r
 }
 
