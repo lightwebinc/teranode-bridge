@@ -30,6 +30,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM gcr.io/distroless/static:nonroot@sha256:1c2c046bc09ed40fad370b599a0b1ae7987f55b01e247cf27a7c27cd97e5bbc7
 USER nonroot:nonroot
 COPY --from=builder /out/ /usr/local/bin/
+
+# The licences travel with the image, not only with the source tree. The binary
+# above is statically linked, so it contains the code of every module in
+# LICENSE-THIRD-PARTY and none of their licence files. Apache-2.0 section 4,
+# MIT and BSD-3 all require their text to reach the recipient of a binary.
+COPY LICENSE NOTICE LICENSE-THIRD-PARTY /usr/share/doc/teranode-bridge/
 # tx / subtree / block delivery lanes, the retrieval plane, then the metrics
 # and health listener (-metrics-addr, which also serves /health*).
 EXPOSE 8725 9143 9144 9145 9146

@@ -5,6 +5,8 @@ build/
 ci/
 docs/
 *.md
-LICENSE
-NOTICE
+# LICENSE, NOTICE and LICENSE-THIRD-PARTY are DELIBERATELY not ignored: the
+# final stage copies them into the image. They were excluded here, which meant
+# an image shipped a statically linked binary carrying every dependency's code
+# and none of their licence files, and it would now fail the build instead.
 teranode-bridge

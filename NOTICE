@@ -60,6 +60,19 @@ This product includes third-party software, distributed under the terms
 of their respective licenses. Each dependency retains its own copyright;
 this notice does not modify those licenses.
 
+The list below names the significant ones. It is NOT the complete set:
+a statically linked binary contains every module it imports, directly or
+not, and LICENSE-THIRD-PARTY reproduces all of their licenses verbatim.
+That file is generated from what the binary actually links rather than
+maintained by hand, and it ships inside the container image, because
+Apache-2.0, MIT and BSD-3 all require their text to reach whoever
+receives a binary and static linking discards the files they live in.
+
+Note what is NOT here: this product links no BSV Association code. It
+carries no Open BSV obligation and no attribution line, and adding one
+would be as wrong as omitting a real one. Its siblings arcade-bridge and
+overlay-bridge do link go-sdk and do carry both.
+
   github.com/lightwebinc/shard-common         Apache License 2.0
   google.golang.org/grpc                      Apache License 2.0
   github.com/twmb/franz-go                    BSD 3-Clause License
