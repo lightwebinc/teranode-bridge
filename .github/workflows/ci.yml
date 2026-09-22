@@ -56,4 +56,10 @@ jobs:
       # so a new dependency that nobody notices is a licence obligation that
       # nobody notices. This fails the build instead.
       - name: third-party licences are current
+        # working-directory, like the Dagger step above: this repo is checked
+        # out into a subdirectory beside shard-common, so the workspace root is
+        # not the repo.
+        working-directory: teranode-bridge
+        env:
+          GOWORK: "off"
         run: python3 scripts/gen-third-party-licenses.py . --check
