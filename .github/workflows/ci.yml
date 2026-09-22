@@ -55,6 +55,16 @@ jobs:
       # LICENSE-THIRD-PARTY is generated from what the binary actually links,
       # so a new dependency that nobody notices is a licence obligation that
       # nobody notices. This fails the build instead.
+      # The Go above is installed from ci/go.mod, which is a DIFFERENT module
+      # with a lower floor, and GOTOOLCHAIN is local so nothing auto-switches.
+      # The Dagger pipeline never notices because it runs Go inside containers;
+      # this step is the first thing to run go on the host, and it needs a
+      # toolchain that satisfies the main module.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: teranode-bridge/go.mod
+          cache: false
+
       - name: third-party licences are current
         # working-directory, like the Dagger step above: this repo is checked
         # out into a subdirectory beside shard-common, so the workspace root is
