@@ -17,16 +17,6 @@ This product includes software developed at Lightweb Inc. and licensed
 under the Apache License, Version 2.0 (see LICENSE).
 
 =========================================================================
-Conceptual Attribution
-
-The IPv6 multicast transaction broadcast architecture from which this
-software draws inspiration was articulated by Dr. Craig S. Wright:
-
-  Multicast within Multicast: Anycast
-  https://singulargrit.substack.com/p/multicast-within-multicast-anycast
-  https://singulargrit.substack.com/
-
-=========================================================================
 Third-Party Standards
 
 This software transports objects conforming to published standards
