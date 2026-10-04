@@ -193,7 +193,7 @@ build deliberately does *not* use that replace: a published image always resolve
 
 A Kubernetes Helm chart is published from a dedicated chart repository:
 
-- Repository: [`lightwebinc/teranode-bridge-helm`](https://github.com/lightwebinc/teranode-bridge-helm)
+- Repository: [`charts/teranode-bridge`](https://github.com/lightwebinc/charts/tree/main/charts/teranode-bridge)
 - OCI: `helm install bridge oci://ghcr.io/lightwebinc/charts/teranode-bridge`
 
 `config.advertise`, `config.propagation`, `config.kafka` and `config.peerId` are
