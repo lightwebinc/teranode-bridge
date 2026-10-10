@@ -31,25 +31,13 @@ the link-facing address, not `[::]`, once the deployment is settled.
 
 ### Lane numbers
 
-Port numbers encode which SIDE of the fabric a lane sits on, so the same
-object class carries two numbers depending on direction:
+`8725` is the transaction class number; `9143`/`9144` are the consumer-side
+subtree/block lanes this bridge listens on; `8726`/`8727` are the fabric-side
+lanes on the edge proxy, which the reverse path submits to. See
+[lane numbering](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/lane-numbering.md) for the full rule.
 
-- **`8725`** is the object plane's transaction class number — the same number an
-  edge's open tx ingress uses, applied here to the delivery direction.
-- **`9143`/`9144`** are the **consumer-side** subtree/block lanes: the delivery
-  ports this bridge listens on (`-subtree-listen`/`-block-listen`) and the edge
-  dials. They exist only on the consumer. Nothing in the fabric listens on them.
-- **`8726`/`8727`** are the **fabric-side** subtree/block lanes: the edge
-  PROXY's object ingress. The proxy only ever emanates onto the fabric, so its
-  lanes carry the fabric's numbers whatever transport a submit arrives over —
-  which is why the bridge's upward submits (`-edge-subtree-port`/`-edge-block-port`,
-  see [Reverse path](#reverse-path-cluster--object-plane)) target 8726/8727, not
-  the bridge's own listen numbers. The payload is the same bare BRC-143/144
-  object in both directions; only the side of the fabric differs.
-- Every lane stays clear of a stock cluster's own listen ports, so a bridge can
-  share a LAN — or, pod-attached, a network namespace — with Teranode services.
-  In particular `8833`, a stock cluster's propagation HTTP port, must not be
-  used for the tx lane.
+Every lane stays clear of a stock cluster's own listen ports. In particular
+`8833`, a stock cluster's propagation HTTP port, must not be used for the tx lane.
 
 ## Retrieval plane
 

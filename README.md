@@ -6,7 +6,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/lightwebinc/teranode-bridge.svg)](https://pkg.go.dev/github.com/lightwebinc/teranode-bridge)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-> Part of the [**BSV Layered Multicast**](https://github.com/lightwebinc/bsv-multicast) open-source project — see the main repository for the full architecture, design docs, and BRC specifications.
+> Part of the [**BSV Layered Multicast**](https://github.com/lightwebinc/bsv-multicast) open-source project. See the main repository for the full architecture, design docs, and BRC specifications.
 
 A landing-tier bridge for **pushed delivery into an unmodified Teranode cluster**.
 
@@ -95,7 +95,7 @@ See [docs/configuration.md](docs/configuration.md) for the full flag reference.
 | `8727` | out | BRC-144 block submits to the edge proxy's object ingress (`-edge-block-port`) |
 
 Ports encode the side of the fabric a lane sits on; see
-[Configuration › Lane numbers](docs/configuration.md#lane-numbers).
+[lane numbering](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/lane-numbering.md).
 
 ## Observability
 
