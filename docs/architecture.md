@@ -652,3 +652,12 @@ registries (≈ 50 bytes per live hash, each bounded at 2²⁰ entries ≈ 50 Mi
 read buffers grow to at most `-max-object` per open connection. CPU is
 negligible: hashing block headers, walking transaction structures, and two
 count-format conversions.
+
+## Known upstream limitations
+
+- Teranode's blockchain Subscribe notifications carry no origin, so the reverse
+  path cannot tell a block this cluster mined from one it validated. The
+  `-mine-tag` coinbase gate closes that case by configuration.
+- Teranode's catchup can charge a peer for a locally invalid block, and its
+  circuit breaker can fail to close. Neither affects the bridge's own lanes;
+  both show up as a landing cluster that stops catching up and needs a restart.
