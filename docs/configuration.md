@@ -639,7 +639,7 @@ they go in the container command (or a chart's `args`).
 ```bash
 docker run --rm \
   -p 8725:8725 -p 9143:9143 -p 9144:9144 -p 9145:9145 \
-  ghcr.io/lightwebinc/teranode-bridge:0.9.0 \
+  ghcr.io/lightwebinc/teranode-bridge:0.10.1 \
     -advertise   'http://[2001:db8:3f::1]:9145' \
     -propagation 'http://192.0.2.10:20833' \
     -kafka       '192.0.2.10:19092'
