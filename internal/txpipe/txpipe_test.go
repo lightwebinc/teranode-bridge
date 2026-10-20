@@ -527,3 +527,70 @@ func TestLateParentStillRecovers(t *testing.T) {
 		t.Fatalf("accepted=%d rejected=%d, want 1/0: the ladder must outlast a 2s-late parent", s.Accepted, s.Rejected)
 	}
 }
+
+// TestPartial422SettlesPerMember pins the real propagation shape: members are
+// validated independently, the good ones are accepted, and the batch answers
+// with the FIRST client error among the failures (here 422, a missing parent)
+// plus one line per failing member. The pipe must book the unnamed member
+// accepted and the invalid one rejected at once, and retry ONLY the member
+// waiting on a parent. Read as a whole-batch refusal, one orphan used to resend
+// every member six times and then book all of them rejected.
+func TestPartial422SettlesPerMember(t *testing.T) {
+	a := rawTx([32]byte{51}, 51)
+	b := rawTx([32]byte{52}, 52)
+	c := rawTx([32]byte{53}, 53)
+	aID, bID, cID := txidOf(t, a).Display(), txidOf(t, b).Display(), txidOf(t, c).Display()
+
+	var mu sync.Mutex
+	var bodies [][]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var ids []string
+		for _, tx := range splitBody(t, raw) {
+			ids = append(ids, txidOf(t, tx).Display())
+		}
+		mu.Lock()
+		bodies = append(bodies, ids)
+		first := len(bodies) == 1
+		mu.Unlock()
+		if !first {
+			w.WriteHeader(http.StatusOK) // the parent has landed
+			_, _ = w.Write([]byte("OK"))
+			return
+		}
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = fmt.Fprintf(w, "Failed to process transactions:\n"+
+			"TX_MISSING_PARENT (34): [ProcessTransaction][%s] missing parent tx\n"+
+			"TX_INVALID (69): [ProcessTransaction][%s] script failed\n", bID, cID)
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		Endpoints: []string{srv.URL},
+		BatchTxs:  10, Linger: 5 * time.Millisecond, Inflight: 1, Builders: 1, RetryAttempts: 6,
+	}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = p.Run(ctx) }()
+	for _, tx := range [][]byte{a, b, c} {
+		if err := p.Enqueue(ctx, tx, txidOf(t, tx)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, func() bool { s := p.Stats(); return s.Accepted == 2 && s.Rejected == 1 })
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("/txs requests = %d, want 2 (the batch, then ONE retry of the orphan)", len(bodies))
+	}
+	if got := bodies[1]; len(got) != 1 || got[0] != bID {
+		t.Fatalf("retry carried %v, want only the missing-parent member %s (accepted %s and invalid %s must not be resent)", got, bID, aID, cID)
+	}
+	if s := p.Stats(); s.RetryAccepted != 1 {
+		t.Fatalf("retry_accepted = %d, want 1", s.RetryAccepted)
+	}
+}

@@ -378,10 +378,18 @@ func (p *Pipe) submit(ctx context.Context, b *batch) {
 			p.accepted.Add(n)
 			return
 
-		case status == http.StatusInternalServerError &&
-			strings.HasPrefix(body, "Failed to process transactions"):
-			// Partial failure: the others were processed. Re-attribute the
-			// failed txids from the error lines and retry those as one further batch.
+		case strings.HasPrefix(body, partialPrefix) && (status == http.StatusInternalServerError || p.namesMember(body)):
+			// Partial failure, WHATEVER the status: propagation validates every
+			// member independently and accepts the good ones, then reports the
+			// batch with the first client error among the failures (422 for a
+			// missing parent, 409 for a conflict, 400 for an invalid tx), or 500
+			// when a server fault is among them. Only a 500 used to be read this
+			// way; a 422 fell to the refusal path below, which re-sent all 512
+			// members six times over the retry ladder and then booked every one
+			// of them rejected. One orphan in a batch cost the cluster ~3000
+			// re-validations of accepted transactions, at exactly the moment it
+			// was already behind (measured: a 20k tx/s lab run collapsed into
+			// 422 storms within seconds of its first orphan).
 			p.settlePartial(ctx, b, body)
 			return
 
@@ -429,7 +437,32 @@ func (p *Pipe) submit(ctx context.Context, b *batch) {
 	p.failed.Add(n)
 }
 
-// settlePartial parses the 500 body's error lines, retries the named txids and
+// partialPrefix opens propagation's per-member failure report on /txs.
+const partialPrefix = "Failed to process transactions"
+
+// isMissingParent reports whether a failure line is a missing parent
+// ("TX_MISSING_PARENT (34): [ProcessTransaction][<txid>] missing parent tx"),
+// by its code or its message. It is the one failure that resolves with time
+// (the parent lands), so it is the only one worth retrying; any other named
+// failure is final.
+func isMissingParent(line string) bool {
+	return strings.Contains(line, "MISSING_PARENT") || strings.Contains(strings.ToLower(line), "missing parent")
+}
+
+// namesMember reports whether a partial-failure body attributes at least one
+// line to a transaction. One that names nobody cannot be settled per member, so
+// it keeps the whole-batch handling.
+func (p *Pipe) namesMember(body string) bool {
+	for _, line := range strings.Split(body, "\n") {
+		if _, ok := p.subjectTxID(line); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// settlePartial parses a partial-failure body's error lines, retries the named
+// txids that are waiting on a parent, books other named failures rejected, and
 // counts everything else accepted.
 //
 // Attribution is not guaranteed: an error line may name no batch member (a
@@ -444,7 +477,7 @@ func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
 		mine[j.id.Display()] = struct{}{}
 	}
 
-	failedIDs := make(map[string]struct{})
+	failedIDs := make(map[string]bool) // txid -> retryable (missing parent)
 	unattributed := 0
 	for _, line := range strings.Split(body, "\n") {
 		id, ok := p.subjectTxID(line)
@@ -452,17 +485,26 @@ func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
 			continue // not a per-transaction error line
 		}
 		if _, ours := mine[id]; ours {
-			failedIDs[id] = struct{}{}
+			failedIDs[id] = isMissingParent(line)
 			continue
 		}
 		unattributed++
 	}
 
 	var toRetry []job
+	final := 0
 	for _, j := range b.jobs {
-		if _, ok := failedIDs[j.id.Display()]; ok {
+		retryable, failed := failedIDs[j.id.Display()]
+		switch {
+		case !failed:
+		case retryable:
 			toRetry = append(toRetry, j)
+		default:
+			final++ // invalid, conflicting, double spend: waiting will not help
 		}
+	}
+	if final > 0 {
+		p.rejected.Add(uint64(final))
 	}
 	if unattributed > 0 {
 		p.unattributed.Add(uint64(unattributed))
@@ -470,7 +512,7 @@ func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
 			"count", unattributed, "batch_txs", len(b.jobs), "body", firstLine(body))
 	}
 	// Never let the unknown count inflate accepted.
-	ok := len(b.jobs) - len(toRetry) - unattributed
+	ok := len(b.jobs) - len(toRetry) - final - unattributed
 	if ok < 0 {
 		ok = 0
 	}
@@ -568,25 +610,35 @@ func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 			p.accepted.Add(uint64(len(pending)))
 			return
 
-		case status == http.StatusInternalServerError &&
-			strings.HasPrefix(respBody, "Failed to process transactions"):
-			// Only the transactions the body still NAMES are outstanding; the
-			// rest of the retry batch landed and must be booked as recovered.
-			named := make(map[string]struct{})
+		case strings.HasPrefix(respBody, partialPrefix) && (status == http.StatusInternalServerError || p.namesMember(respBody)):
+			// Any status: only the transactions the body still NAMES are
+			// outstanding; the rest of the retry batch landed and are booked as
+			// recovered. Of the named, only those waiting on a parent stay in
+			// the ladder; the rest are final and leave it now.
+			named := make(map[string]bool)
 			for _, line := range strings.Split(respBody, "\n") {
 				if id, ok := p.subjectTxID(line); ok {
-					named[id] = struct{}{}
+					named[id] = isMissingParent(line)
 				}
 			}
 			next := pending[:0:0]
+			final := 0
 			for _, j := range pending {
-				if _, bad := named[j.id.Display()]; bad {
+				retryable, bad := named[j.id.Display()]
+				switch {
+				case !bad:
+				case retryable:
 					next = append(next, j)
+				default:
+					final++
 				}
 			}
-			if ok := len(pending) - len(next); ok > 0 {
+			if ok := len(pending) - len(next) - final; ok > 0 {
 				p.retryAccepted.Add(uint64(ok))
 				p.accepted.Add(uint64(ok))
+			}
+			if final > 0 {
+				p.rejected.Add(uint64(final))
 			}
 			pending = next
 
