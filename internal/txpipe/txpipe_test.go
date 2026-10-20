@@ -488,3 +488,42 @@ func TestRateLimitRetriesWholeBatch(t *testing.T) {
 		t.Errorf("RateLimited = %d, want 2", s.RateLimited)
 	}
 }
+
+// TestLateParentStillRecovers pins the retry ladder's reach: a child whose
+// parent only lands ~2s later (422 until then) must still be accepted. The old
+// 25/100/400ms ladder gave up after ~0.5s and booked it rejected, which lost 76
+// transactions in one burst on a 500 tx/s soak.
+func TestLateParentStillRecovers(t *testing.T) {
+	start := time.Now()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if time.Since(start) < 2*time.Second {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte("Failed to process transactions:"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		Endpoints: []string{srv.URL},
+		BatchTxs:  10, Linger: 5 * time.Millisecond, Inflight: 1, Builders: 1, RetryAttempts: 6,
+	}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = p.Run(ctx) }()
+
+	tx := rawTx([32]byte{41}, 41)
+	if err := p.Enqueue(ctx, tx, txidOf(t, tx)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { s := p.Stats(); return s.Accepted == 1 || s.Rejected > 0 })
+	if s := p.Stats(); s.Accepted != 1 || s.Rejected != 0 {
+		t.Fatalf("accepted=%d rejected=%d, want 1/0: the ladder must outlast a 2s-late parent", s.Accepted, s.Rejected)
+	}
+}

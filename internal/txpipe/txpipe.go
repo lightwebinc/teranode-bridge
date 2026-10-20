@@ -529,7 +529,11 @@ func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 		return
 	}
 	p.retried.Add(uint64(len(jobs)))
-	delays := []time.Duration{25 * time.Millisecond, 100 * time.Millisecond, 400 * time.Millisecond}
+	// The ladder has to outlast the slowest parent, not the typical one: under a
+	// 500 tx/s soak a burst of 76 children (in 13 batches) stayed 422 past the
+	// old 25/100/400 ms ladder and was booked rejected, losing every one of them.
+	// Waiting longer costs a goroutine; giving up costs the transaction.
+	delays := []time.Duration{25 * time.Millisecond, 100 * time.Millisecond, 400 * time.Millisecond, 1600 * time.Millisecond, 3200 * time.Millisecond}
 	pending := jobs
 
 	for attempt := 0; attempt < p.cfg.RetryAttempts && len(pending) > 0; attempt++ {

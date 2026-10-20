@@ -123,7 +123,7 @@ func main() {
 		txLinger     = flag.Duration("tx-linger", 2*time.Millisecond, "max age of a non-full batch before it is sent")
 		txInflight   = flag.Int("tx-inflight", 4, "concurrent batch submissions in flight")
 		txBuilders   = flag.Int("tx-builders", 4, "parallel batch builders (power of two, max 16)")
-		txRetries    = flag.Int("tx-retries", 3, "per-tx retries for failures that resolve with time (missing parent); 0 = off")
+		txRetries    = flag.Int("tx-retries", 6, "per-tx retries for failures that resolve with time (missing parent), on a 25ms..3.2s ladder (6 = ~8.5s); 0 = off")
 
 		metricsAddr    = flag.String("metrics-addr", "[::]:9146", "HTTP listener for /metrics, /health*, /healthz, /readyz, /loglevel, /debug/pprof (empty = off)")
 		legacyPrefix   = flag.Bool("metrics-legacy-prefix", true, "also emit every pre-existing series under the old btb_ name alongside teranode_bridge_. On for one release so dashboards survive the cutover; set false once they are migrated")
