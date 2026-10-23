@@ -6,7 +6,7 @@
 # No ENV defaults are baked in: the bridge is configured entirely by flags, so
 # pass them as the container command / Helm `args`. See docs/configuration.md.
 
-FROM golang:1.27-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS builder
+FROM golang:1.27-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS builder
 RUN apk add --no-cache git ca-certificates
 WORKDIR /src
 
