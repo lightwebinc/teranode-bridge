@@ -27,7 +27,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -ldflags "-s -w -X main.Version=${VERSION}" \
         -o /out/teranode-bridge ./cmd/teranode-bridge
 
-FROM gcr.io/distroless/static:nonroot@sha256:1c2c046bc09ed40fad370b599a0b1ae7987f55b01e247cf27a7c27cd97e5bbc7
+FROM gcr.io/distroless/static:nonroot@sha256:d62067879de890a1def9da0e7766b7d20810a5e5555cef8506b752437d7a3e88
 USER nonroot:nonroot
 COPY --from=builder /out/ /usr/local/bin/
 
