@@ -74,7 +74,7 @@ func main() {
 		blockListen   = flag.String("block-listen", "[::]:9144", "delivery lane: blocks (BRC-144)")
 
 		retrievalListen = flag.String("retrieval-listen", "[::]:9145", "retrieval plane listen address")
-		advertise       = flag.String("advertise", "", "base URL the cluster should dial for pulls, e.g. http://[2001:db8:3f::1]:9145 (required unless -mode sink)")
+		advertise       = flag.String("advertise", "", "base URL the cluster should dial for pulls, e.g. http://[2001:db8:3f::1]:9145 (required with -mode all)")
 		apiPrefix       = flag.String("api-prefix", "/api/v1", "path prefix for the retrieval plane; must match what the cluster expects")
 
 		propagation stringList
@@ -82,7 +82,7 @@ func main() {
 
 		subtreeTopic = flag.String("subtree-topic", "subtrees-teranode1", "Kafka topic for subtree announcements")
 		blockTopic   = flag.String("block-topic", "blocks-teranode1", "Kafka topic for block announcements")
-		peerID       = flag.String("peer-id", "", "peer identity stamped on announcements; REQUIRED unless -mode sink (startup refuses empty). Set a valid-format libp2p id that is NOT a real peer (e.g. a freshly derived 12D3KooW… id): the cluster's catchup gate (isPeerBad) treats an unregistered id as unhealthy and diverts catchup to real libp2p peers, while every delivery gate (isPeerMalicious) only checks bans and keeps fetching from us — so the bridge serves objects but can never become a chain-sync source. Empty is UNSAFE: catchup substitutes the announce URL for the missing id, targets our retrieval plane for /headers_from_common_ancestor, 404s, and circuit-breaks the cluster out of recovery (verified at teranode 1cca625; re-verify the two gates on upgrades)")
+		peerID       = flag.String("peer-id", "", "peer identity stamped on announcements; REQUIRED with -mode all (startup refuses empty). Set a valid-format libp2p id that is NOT a real peer (e.g. a freshly derived 12D3KooW… id): the cluster's catchup gate (isPeerBad) treats an unregistered id as unhealthy and diverts catchup to real libp2p peers, while every delivery gate (isPeerMalicious) only checks bans and keeps fetching from us — so the bridge serves objects but can never become a chain-sync source. Empty is UNSAFE: catchup substitutes the announce URL for the missing id, targets our retrieval plane for /headers_from_common_ancestor, 404s, and circuit-breaks the cluster out of recovery (verified at teranode 1cca625; re-verify the two gates on upgrades)")
 
 		blockchain  = flag.String("blockchain", "", "cluster blockchain gRPC host:port; enables the reverse path (cluster -> fabric)")
 		localAsset  = flag.String("local-asset", "", "cluster asset base URL incl. API prefix, e.g. http://192.0.2.10:20090/api/v1 (reverse path)")
@@ -523,10 +523,10 @@ func modeFlagsErr(mode string, propagationN, brokersN int, advertise, peerID, bl
 
 func announceFlagsErr(propagationN, brokersN int, advertise, peerID string) string {
 	if propagationN == 0 || brokersN == 0 || advertise == "" {
-		return "-propagation, -kafka and -advertise are required unless -mode sink"
+		return "-propagation, -kafka and -advertise are required with -mode all (-mode tx needs only -propagation)"
 	}
 	if peerID == "" {
-		return "-peer-id is required unless -mode sink: set a synthetic valid-format libp2p id that is registered nowhere (see docs/configuration.md); announcing with an empty id makes the cluster's catchup circuit-break against the bridge"
+		return "-peer-id is required with -mode all: set a synthetic valid-format libp2p id that is registered nowhere (see docs/configuration.md); announcing with an empty id makes the cluster's catchup circuit-break against the bridge"
 	}
 	return ""
 }

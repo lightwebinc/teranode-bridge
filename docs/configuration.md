@@ -46,7 +46,7 @@ Answers the pulls the cluster makes after an announcement.
 | Flag                | Default     | Value | Description                                                                                                                                                                                                          |
 | ------------------- | ----------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `-retrieval-listen` | `[::]:9145` | `[::]:9145` | Bind address for the retrieval HTTP server. Must be reachable from the cluster's subtree- and block-validation services.                                                                                             |
-| `-advertise`        | —           | `http://[2001:db8:3f::1]:9145` | **Required unless `-mode sink`.** Base URL the cluster dials for pulls. This value, plus `-api-prefix`, is stamped into every announcement.                   |
+| `-advertise`        | —           | `http://[2001:db8:3f::1]:9145` | **Required with `-mode all`.** Base URL the cluster dials for pulls. This value, plus `-api-prefix`, is stamped into every announcement.                   |
 | `-api-prefix`       | `/api/v1`   | `/api/v1` | Path prefix the retrieval plane serves on. Must match what the cluster expects: it concatenates the announced base URL with `/subtree/{hash}` verbatim, and its own asset service mounts everything under `/api/v1`. |
 
 The announced URL is `strings.TrimRight(advertise, "/") + apiPrefix`. Do **not**
@@ -60,8 +60,8 @@ routable address is the normal arrangement.
 
 | Flag           | Default | Value                     | Description                                                                                                              |
 | -------------- | ------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `-propagation` | —       | `http://192.0.2.10:20833` | **Required unless `-mode sink`.** Propagation HTTP base URL(s). Repeatable and/or comma-separated; multiple endpoints are round-robined per transaction. |
-| `-kafka`       | —       | `192.0.2.10:19092`        | **Required unless `-mode sink`.** Cluster Kafka broker(s). Repeatable and/or comma-separated.                             |
+| `-propagation` | —       | `http://192.0.2.10:20833` | **Required unless `-mode sink`** (the only flag `-mode tx` requires). Propagation HTTP base URL(s). Repeatable and/or comma-separated; multiple endpoints are round-robined per transaction. |
+| `-kafka`       | —       | `192.0.2.10:19092`        | **Required with `-mode all`.** Cluster Kafka broker(s). Repeatable and/or comma-separated.                             |
 
 Both flags accumulate: `-propagation a,b` and `-propagation a -propagation b`
 are equivalent.
@@ -80,7 +80,7 @@ mis-advertised listener passes the ping and then fails at produce time.
 | ---------------- | -------------------- | ----- | -------------------------------------------------------------------------------------------- |
 | `-subtree-topic` | `subtrees-teranode1` | `subtrees-teranode1` | Kafka topic the cluster's subtree validation consumes.                                       |
 | `-block-topic`   | `blocks-teranode1`   | `blocks-teranode1` | Kafka topic the cluster's block validation consumes.                                         |
-| `-peer-id`       | `""`                 | `12D3KooW…` (synthetic) | **Required unless `-mode sink`** — startup refuses an empty id. Peer identity stamped on announcements; must be a **synthetic id** (see below). |
+| `-peer-id`       | `""`                 | `12D3KooW…` (synthetic) | **Required with `-mode all`**: startup refuses an empty id. Peer identity stamped on announcements; must be a **synthetic id** (see below). |
 
 Both topic names must match the cluster's own configuration; the defaults match
 Teranode's single-node defaults. An announcement produced to a topic nobody
@@ -96,6 +96,13 @@ and only shows up as a growing gap between `announce stats` and
 > to real libp2p peers, while every **delivery** gate checks only bans and keeps
 > pulling objects from the bridge. The bridge therefore augments the p2p network
 > without ever being asked for the chain itself.
+>
+> **Changed in Teranode since:** Teranode #1758 (`7193ee015`, 2026-09-28)
+> stopped refusing a catchup peer the registry does not know, so on Teranode
+> builds that include it a synthetic id no longer keeps catchup away. Catchup
+> can then select the bridge for chain sync, which it does not serve, with the
+> `404` and circuit-breaker behavior described next. This is open for
+> `-mode all`; `-mode tx` announces nothing, so it never reaches catchup.
 >
 > An **empty** id is unsafe: catchup substitutes the announce **URL** for a
 > missing id, targets the bridge's retrieval plane for chain-sync routes it does
@@ -496,14 +503,14 @@ or to separate object-plane faults from cluster-side ones.
 
 ## Required-flag matrix
 
-| Flag                            | `-mode all`                          | `-mode sink` |
-| ------------------------------- | ------------------------------------ | ------------ |
-| `-propagation`                  | required                             | ignored      |
-| `-kafka`                        | required                             | ignored      |
-| `-advertise`                    | required                             | ignored      |
-| `-peer-id`                      | required                             | ignored      |
-| `-blockchain`                   | optional (enables reverse path)      | ignored      |
-| `-local-asset`, `-edge-ingress` | required **if** `-blockchain` is set | ignored      |
+| Flag                            | `-mode all`                          | `-mode tx`             | `-mode sink` |
+| ------------------------------- | ------------------------------------ | ---------------------- | ------------ |
+| `-propagation`                  | required                             | required               | ignored      |
+| `-kafka`                        | required                             | ignored                | ignored      |
+| `-advertise`                    | required                             | ignored                | ignored      |
+| `-peer-id`                      | required                             | ignored                | ignored      |
+| `-blockchain`                   | optional (enables reverse path)      | refused (exits `2`)    | ignored      |
+| `-local-asset`, `-edge-ingress` | required **if** `-blockchain` is set | ignored                | ignored      |
 
 Missing a required flag exits `2` before any listener opens. A construction
 failure (bad propagation config, unreachable Kafka client setup, bad blockchain
