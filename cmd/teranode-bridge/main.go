@@ -327,6 +327,7 @@ func main() {
 	}
 	for _, ln := range laneSet {
 		ln.DrainTimeout = *drainFor
+		ln.DrainStagger = 25 * time.Millisecond
 		if l, ok := held[ln.Name]; ok {
 			ln.Listener = l
 			log.Info("lane socket held by systemd", "lane", ln.Name, "addr", l.Addr().String())

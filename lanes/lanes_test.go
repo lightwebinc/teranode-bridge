@@ -445,3 +445,53 @@ func TestServeUsesHeldListener(t *testing.T) {
 	_, _ = conn.Write(subtreeFrame(5, 2))
 	waitCond(t, "object on the held socket", func() bool { c.mu.Lock(); defer c.mu.Unlock(); return len(c.objs) == 1 })
 }
+
+// TestDrainStaggersFINs pins the staggered drain: connections receive their
+// FIN one stagger apart, so a peer spreading over several connections always
+// has live ones while the others redial.
+func TestDrainStaggersFINs(t *testing.T) {
+	var c captured
+	l := &Lane{
+		Name: "subtree", Class: objfmt.ClassSubtree, Addr: "127.0.0.1:0",
+		Handle: c.handle(false), Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DrainTimeout: 3 * time.Second, DrainStagger: 150 * time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan struct{})
+	go func() { _ = l.Serve(ctx); close(served) }()
+	waitCond(t, "bound", l.Bound)
+
+	conns := make([]net.Conn, 2)
+	for i := range conns {
+		conn, err := net.Dial("tcp", l.ListenerAddr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		conns[i] = conn
+	}
+	waitCond(t, "both connections open", func() bool { return l.Stats().Active == 2 })
+
+	start := time.Now()
+	cancel()
+	fins := make(chan time.Duration, 2)
+	for _, conn := range conns {
+		go func(conn net.Conn) {
+			_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+			_, _ = conn.Read(make([]byte, 1))
+			fins <- time.Since(start)
+			_ = conn.Close()
+		}(conn)
+	}
+	a, b := <-fins, <-fins
+	if b < a {
+		a, b = b, a
+	}
+	if b-a < 100*time.Millisecond {
+		t.Fatalf("FINs %v and %v apart by %v, want about the 150 ms stagger", a, b, b-a)
+	}
+	select {
+	case <-served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("lane did not return")
+	}
+}

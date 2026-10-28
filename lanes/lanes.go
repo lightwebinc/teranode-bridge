@@ -75,6 +75,13 @@ type Lane struct {
 	// closes connections at once.
 	DrainTimeout time.Duration
 
+	// DrainStagger spaces the drain's FINs: the k-th connection to drain
+	// waits k times this long before sending its FIN. An edge that spreads
+	// its stream over several connections then always has live ones while
+	// the others redial, instead of finding every connection closing at once
+	// and nowhere to put what arrives meanwhile. Zero sends every FIN at once.
+	DrainStagger time.Duration
+
 	MaxObject int // 0 = codec default
 
 	// Owned makes Handle receive an object the handler may retain: a copy in a
@@ -97,6 +104,7 @@ type Lane struct {
 	listener net.Listener
 	bound    atomic.Bool
 	counts   Counters
+	drainSeq atomic.Int64 // order in which connections start draining
 
 	// Objects and bytes are counted per connection (the hot path then never
 	// shares a cache line between connection goroutines) and summed at Stats
@@ -302,6 +310,14 @@ func (l *Lane) serveConn(ctx context.Context, conn net.Conn) {
 		select {
 		case <-ctx.Done():
 			if tc, ok := conn.(*net.TCPConn); ok && draining {
+				if l.DrainStagger > 0 {
+					wait := time.Duration(l.drainSeq.Add(1)-1) * l.DrainStagger
+					select {
+					case <-time.After(min(wait, l.DrainTimeout/2)):
+					case <-done:
+						return
+					}
+				}
 				_ = tc.CloseWrite()
 				_ = tc.SetReadDeadline(time.Now().Add(l.DrainTimeout))
 				return
