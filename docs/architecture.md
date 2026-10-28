@@ -120,11 +120,15 @@ Connection handling reflects the bare framing:
 
 ### Per-class handling
 
-**Transactions** (`handleTx`) — compute the txid, put the transaction in the tx
-cache (so it can serve as a subtree member later), then mark it in the seen
-registry. A hash already registered is a re-delivery after a failover or
-reconnect and is dropped without a second submit. Otherwise it is POSTed to the
-propagation service.
+**Transactions** (`handleTx`, or the lane session `txSession`) — compute the
+txid and admit the transaction to the tx cache (so it can serve as a subtree
+member later). The admission is also the duplicate check: a txid the cache
+already holds is a re-delivery after a failover or reconnect and is dropped
+without a second submit. Otherwise it is handed to the batching pipeline for
+the propagation service. Transactions never enter the seen-registry: its
+subtree and block entries are the reverse path's origin filter, and a
+transaction stream of hundreds of thousands a second would rotate them out
+within seconds.
 
 **Subtrees** (`handleSubtree`) — the frame's first 32 bytes are the merkle root
 in wire order; the node count follows. The object is **stored before it is
@@ -157,24 +161,36 @@ serve the pull that a later re-announce provokes.
 
 ## Submitting transactions — the batching pipeline
 
-The lane read loop never waits on the cluster. `handleTx` computes the txid,
-makes **one** immutable copy (shared by cache and pipeline — lane slices alias
-the reader's buffer), marks the seen-registry and enqueues; everything after
-that is the tx pipeline's problem. The pipeline accumulates contiguous batch
-bodies and ships them on propagation's **`POST /txs`** batch endpoint — the body
-format is the same bare concatenated-transaction stream the lane itself carries,
-so no re-encoding happens anywhere.
+The lane read loop never waits on the cluster. The tx lane copies each object
+into a per-connection slab (`lanes.Lane.Owned`): one allocation per megabyte of
+transactions instead of one per transaction, and a slice the cache and the
+pipeline can both keep. `admitTx` computes the txid and admits the transaction
+to the tx cache, and the connection's session (`lanes.Session`) collects new
+transactions into runs of up to 64 that it hands to one batch builder in a
+single channel send. A run is flushed whenever the lane is about to block on
+the network, so a transaction that arrives alone is never held back. Everything
+after that is the tx pipeline's problem. The pipeline accumulates contiguous
+batch bodies (pooled, so a body never regrows) and ships them on propagation's
+**`POST /txs`** batch endpoint. The body format is the same bare
+concatenated-transaction stream the lane itself carries, so no re-encoding
+happens anywhere.
 
 Measured on a 2×18-core host against a mock propagation sink: **1.47M tx/s
 sustained** (three consecutive 30 s runs, stable heap, zero losses), from 21
 tx/s with the original serial per-transaction POST. The serial design coupled
 throughput to cluster latency (1/RTT per connection); batching decouples them,
 and backpressure — a full pipeline queue blocks the lane, closing the TCP window
-— bounds memory when the cluster is slower than the fabric.
+— bounds memory when the cluster is slower than the fabric. That figure used
+70-byte transactions and a blind sink. With 500-byte transactions on an 8-core
+host shared with the delivering edge and a propagation stand-in, the slab
+copies, admission-as-dedup and run hand-off took the bridge from about 8.8 µs
+to about 3.7 µs of CPU per transaction, and it carried 1.6M tx/s over eight
+lane connections.
 
 Sizing: `-tx-batch`/`-tx-batch-bytes` (clamped to 1023 / 30 MiB), `-tx-linger`
 (latency bound when quiet), `-tx-inflight` (concurrent batch requests),
-`-tx-builders` (parallel accumulators, routed by txid). The `/txs` contract — a
+`-tx-builders` (parallel accumulators; lane sessions hand runs to them round
+robin, single enqueues route by txid). The `/txs` contract — a
 request must not contain both a parent and its child, because in-batch
 processing is concurrent — is enforced structurally: each transaction's input
 outpoints are walked, and a dependency on the open batch seals it first.
@@ -304,8 +320,9 @@ in. Two instances are created, answering two different questions.
 `seen` — "has this hash crossed the bridge, and which way?" — does three jobs
 that look similar but are not:
 
-- **Down (delivery)** — suppress re-injection of a transaction already handed to
-  the cluster. Failover and reconnects legitimately re-deliver.
+- **Down (delivery)** — suppress re-injection of a subtree or block already
+  handed to the cluster. Failover and reconnects legitimately re-deliver.
+  (Transactions are de-duplicated by the tx cache's admission instead.)
 - **Up (reverse path)** — decide whether a subtree or block the cluster just
   accepted actually originated here. Anything registered here is remote in
   origin; anything absent is this cluster's to publish.

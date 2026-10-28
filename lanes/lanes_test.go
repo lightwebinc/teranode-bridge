@@ -230,3 +230,143 @@ func TestMaxObjectBound(t *testing.T) {
 	}
 	_ = conn.Close()
 }
+
+// TestOwnedObjectsSurviveLaterReads pins the Owned contract the tx lane relies
+// on: a handler may keep the slice it was given, and nothing the reader does
+// afterwards (more reads, buffer compaction, a new slab) changes its bytes.
+func TestOwnedObjectsSurviveLaterReads(t *testing.T) {
+	var mu sync.Mutex
+	var kept [][]byte
+	l := &Lane{
+		Name: "subtree", Class: objfmt.ClassSubtree, Addr: "127.0.0.1:0", Owned: true,
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Handle: func(_ context.Context, obj []byte) error {
+			mu.Lock()
+			kept = append(kept, obj) // retained WITHOUT a copy
+			mu.Unlock()
+			return nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = l.Serve(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitCond(t, "bound", l.Bound)
+
+	conn, err := net.Dial("tcp", l.ListenerAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	// Enough objects to fill several slabs, including one too large for a slab.
+	var want [][]byte
+	for i := 0; i < 600; i++ {
+		nodes := 100
+		if i == 300 {
+			nodes = slabSize / 32 // larger than slabSize/8: its own allocation
+		}
+		f := subtreeFrame(byte(i), nodes)
+		want = append(want, f)
+		if _, err := conn.Write(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitCond(t, "all objects", func() bool { mu.Lock(); defer mu.Unlock(); return len(kept) == len(want) })
+	mu.Lock()
+	defer mu.Unlock()
+	for i := range want {
+		if !bytes.Equal(kept[i], want[i]) {
+			t.Fatalf("object %d changed after later reads", i)
+		}
+		if cap(kept[i]) != len(kept[i]) {
+			t.Fatalf("object %d has spare capacity %d: an append would overwrite its neighbour", i, cap(kept[i])-len(kept[i]))
+		}
+	}
+	if st := l.Stats(); st.Objects != uint64(len(want)) {
+		t.Fatalf("live connection objects = %d, want %d", st.Objects, len(want))
+	}
+}
+
+// TestStatsSumLiveAndClosedConnections pins the per-connection counters: a
+// snapshot counts objects on open connections and on connections already gone.
+func TestStatsSumLiveAndClosedConnections(t *testing.T) {
+	var c captured
+	l, addr, _ := startLane(t, c.handle(false), 0)
+	f := subtreeFrame(7, 4)
+
+	first, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		_, _ = first.Write(f)
+	}
+	waitCond(t, "first conn objects", func() bool { return l.Stats().Objects == 3 })
+	_ = first.Close()
+	waitCond(t, "first conn retired", func() bool { return l.Stats().Active == 0 })
+
+	second, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Close() }()
+	for i := 0; i < 2; i++ {
+		_, _ = second.Write(f)
+	}
+	waitCond(t, "both conns counted", func() bool { return l.Stats().Objects == 5 })
+	if st := l.Stats(); st.Bytes != uint64(5*len(f)) {
+		t.Fatalf("bytes = %d, want %d", st.Bytes, 5*len(f))
+	}
+}
+
+// TestSessionFlushesBeforeBlocking pins the latency half of the session
+// contract: an object that arrives alone is flushed before the lane waits for
+// the next one, so batching the hand-off never holds an object back.
+func TestSessionFlushesBeforeBlocking(t *testing.T) {
+	var mu sync.Mutex
+	var pending, flushed int
+	l := &Lane{
+		Name: "subtree", Class: objfmt.ClassSubtree, Addr: "127.0.0.1:0",
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		NewSession: func() Session {
+			return Session{
+				Handle: func(context.Context, []byte) error {
+					mu.Lock()
+					pending++
+					mu.Unlock()
+					return nil
+				},
+				Flush: func(context.Context) error {
+					mu.Lock()
+					flushed += pending
+					pending = 0
+					mu.Unlock()
+					return nil
+				},
+			}
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = l.Serve(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitCond(t, "bound", l.Bound)
+
+	conn, err := net.Dial("tcp", l.ListenerAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	for i := 1; i <= 3; i++ {
+		if _, err := conn.Write(subtreeFrame(byte(i), 2)); err != nil {
+			t.Fatal(err)
+		}
+		// Nothing more is sent until this object has been flushed.
+		want := i
+		waitCond(t, fmt.Sprintf("object %d flushed while the lane waits", i), func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return flushed == want
+		})
+	}
+}

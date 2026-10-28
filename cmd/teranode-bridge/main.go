@@ -278,10 +278,11 @@ func main() {
 	laneSet := []*lanes.Lane{
 		{
 			Name: "tx", Class: objfmt.ClassTx, Addr: *txListen, Log: log, MaxObject: *maxObject,
-			SizeHistogram: *txSizeHist,
+			SizeHistogram: *txSizeHist, Owned: true,
 			Handle: func(ctx context.Context, obj []byte) error {
-				return handleTx(ctx, obj, txs, seen, pipe)
+				return handleTx(ctx, obj, txs, pipe)
 			},
+			NewSession: func() lanes.Session { return txSession(txs, pipe) },
 		},
 		{
 			Name: "subtree", Class: objfmt.ClassSubtree, Addr: *subtreeListen, Log: log, MaxObject: *maxObject,
@@ -473,29 +474,60 @@ func announceFlagsErr(propagationN, brokersN int, advertise, peerID string) stri
 // slot, a registry entry (poisoning dedupe for the EF copy that follows) and a
 // batch slot, and the refusal reads as a cluster fault instead of a sender bug.
 // Refuse it here, where the cause is still legible.
-func handleTx(ctx context.Context, obj []byte, txs *cache.Generational, seen *registry.Registry,
-	pipe *txpipe.Pipe) error {
-
-	if !objfmt.IsEF(obj) {
-		return fmt.Errorf("%w: not BRC-30 extended format (%d bytes)", lanes.ErrReject, len(obj))
-	}
-	id, err := objfmt.TxID(obj)
-	if err != nil {
-		return fmt.Errorf("txid: %w", err)
-	}
-	// ONE copy per transaction, shared immutably by the cache and the pipe.
-	// obj itself aliases the lane reader's buffer and dies at the next read.
-	owned := append([]byte(nil), obj...)
-	txs.PutOwned(cache.Key(id), "tx", owned)
-
-	if _, known := seen.Mark(registry.Key(id), registry.Delivered); known {
-		// Re-delivery after an A/B failover or reconnect. Already handed over.
-		return nil
+func handleTx(ctx context.Context, obj []byte, txs *cache.Generational, pipe *txpipe.Pipe) error {
+	id, fresh, err := admitTx(obj, txs)
+	if err != nil || !fresh {
+		return err
 	}
 	if pipe == nil {
 		return nil // sink mode
 	}
-	return pipe.EnqueueOwned(ctx, owned, hashid.Hash(id))
+	return pipe.EnqueueOwned(ctx, obj, hashid.Hash(id))
+}
+
+// admitTx applies the tx lane's admission to an owned object: EF only, then
+// the txid, then the tx cache's admission, which doubles as the re-delivery
+// check. fresh is false for a duplicate.
+func admitTx(obj []byte, txs *cache.Generational) (id [32]byte, fresh bool, err error) {
+	if !objfmt.IsEF(obj) {
+		return id, false, fmt.Errorf("%w: not BRC-30 extended format (%d bytes)", lanes.ErrReject, len(obj))
+	}
+	if id, err = objfmt.TxID(obj); err != nil {
+		return id, false, fmt.Errorf("txid: %w", err)
+	}
+	// obj is already an owned, immutable copy (the tx lane copies each object
+	// into a per-connection slab, lanes.Lane.Owned), shared by the cache and the
+	// pipe. The cache's admission doubles as the re-delivery check: a txid it
+	// already holds (an A/B failover or reconnect resend) was handed over.
+	// Transactions stay out of the seen-registry on purpose: at hundreds of
+	// thousands a second they would flush the subtree and block entries the
+	// reverse path's origin filter depends on within a second or two.
+	return id, txs.Admit(cache.Key(id), obj), nil
+}
+
+// txSession is the tx lane's per-connection handler: handleTx's admission,
+// with the pipe hand-off batched into runs that the lane flushes before it
+// blocks on the network (lanes.Session), so a run costs one channel send.
+func txSession(txs *cache.Generational, pipe *txpipe.Pipe) lanes.Session {
+	if pipe == nil {
+		return lanes.Session{Handle: func(ctx context.Context, obj []byte) error {
+			return handleTx(ctx, obj, txs, nil)
+		}}
+	}
+	run := pipe.NewBatch()
+	return lanes.Session{
+		Handle: func(ctx context.Context, obj []byte) error {
+			id, fresh, err := admitTx(obj, txs)
+			if err != nil || !fresh {
+				return err
+			}
+			if run.Add(obj, hashid.Hash(id)) {
+				return run.Flush(ctx)
+			}
+			return nil
+		},
+		Flush: run.Flush,
+	}
 }
 
 // probeHealth reports whether at least one propagation endpoint answers.

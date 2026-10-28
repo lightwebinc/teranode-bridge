@@ -167,11 +167,21 @@ type Pipe struct {
 	client *http.Client
 	log    *slog.Logger
 
-	ins   []chan job
-	sem   chan struct{}
-	wg    sync.WaitGroup
-	next  atomic.Uint64
-	rtxid *regexp.Regexp
+	ins []chan []job
+	rr  atomic.Uint64 // round-robin builder choice for Batch sends
+
+	// queued counts transactions sent to a builder and not yet taken off its
+	// queue (the queues hold runs, so their lengths do not).
+	queued atomic.Int64
+	sem    chan struct{}
+	wg     sync.WaitGroup
+	next   atomic.Uint64
+	rtxid  *regexp.Regexp
+
+	// pool recycles batch bodies, job slices and id sets once a submission
+	// settles. Without it every batch regrew its body by doubling, which at a
+	// million transactions a second allocated twice the payload again.
+	pool sync.Pool
 
 	// counters, read via Stats
 	enqueued, accepted, rejected, failed     atomic.Uint64
@@ -208,9 +218,13 @@ func New(cfg Config, log *slog.Logger) (*Pipe, error) {
 	// from the trace. With tracing disabled this wraps a no-op provider.
 	rt := otelhttp.NewTransport(tr)
 
-	ins := make([]chan job, cfg.Builders)
+	// The queues carry runs of transactions (a Batch from a lane session, at
+	// most BatchCap each, or a single one from Enqueue). Capacity is counted
+	// in runs so that, at saturation where every run is full, the pipe holds
+	// about cfg.Queue transactions before backpressure reaches the lane.
+	ins := make([]chan []job, cfg.Builders)
 	for i := range ins {
-		ins[i] = make(chan job, cfg.Queue/cfg.Builders+1)
+		ins[i] = make(chan []job, max(4, cfg.Queue/(cfg.Builders*BatchCap)))
 	}
 	return &Pipe{
 		cfg:    cfg,
@@ -233,23 +247,87 @@ func (p *Pipe) Enqueue(ctx context.Context, raw []byte, id hashid.Hash) error {
 // pipe and the caller must never mutate it again. The tx hot path makes ONE
 // immutable copy per object and shares it between the cache and the pipe.
 func (p *Pipe) EnqueueOwned(ctx context.Context, raw []byte, id hashid.Hash) error {
-	j := job{raw: raw, id: id}
-	in := p.ins[int(id[1])&(p.cfg.Builders-1)]
+	return p.send(ctx, p.ins[int(id[1])&(p.cfg.Builders-1)], []job{{raw: raw, id: id}})
+}
+
+// BatchCap is the most transactions a Batch carries in one send.
+const BatchCap = 64
+
+// Batch is a run of owned transactions handed to the pipe in one channel
+// send: the tx lane fills one per connection and flushes it before it blocks
+// on the network, so the per-transaction cost of the hand-off (a channel send,
+// and often a builder wake-up) is paid once per run instead. A Batch is not
+// safe for concurrent use.
+type Batch struct {
+	p    *Pipe
+	jobs []job
+}
+
+// NewBatch returns an empty batch bound to this pipe.
+func (p *Pipe) NewBatch() *Batch { return &Batch{p: p} }
+
+// Add appends one transaction; ownership of raw transfers to the pipe, as with
+// EnqueueOwned. It reports whether the batch is full and must be flushed.
+func (b *Batch) Add(raw []byte, id hashid.Hash) (full bool) {
+	if b.jobs == nil {
+		b.jobs = b.p.getJobs()
+	}
+	b.jobs = append(b.jobs, job{raw: raw, id: id})
+	return len(b.jobs) >= BatchCap
+}
+
+// Len reports how many transactions are waiting in the batch.
+func (b *Batch) Len() int { return len(b.jobs) }
+
+// Flush hands the batch's transactions to one builder (round robin), blocking
+// while its queue is full: that backpressure reaches the lane's TCP window,
+// as with EnqueueOwned. The batch is empty and reusable afterwards.
+func (b *Batch) Flush(ctx context.Context) error {
+	if len(b.jobs) == 0 {
+		return nil
+	}
+	js := b.jobs
+	b.jobs = nil
+	p := b.p
+	return p.send(ctx, p.ins[int(p.rr.Add(1))&(p.cfg.Builders-1)], js)
+}
+
+// send queues one run of transactions on a builder. Ownership of js moves to
+// the builder, which returns it to the pool once consumed.
+func (p *Pipe) send(ctx context.Context, in chan []job, js []job) error {
 	// Fast path: an uncontended buffered send skips selectgo entirely, which
 	// is measurable at hundreds of thousands of sends per second.
+	n := len(js)
 	select {
-	case in <- j:
-		p.enqueued.Add(1)
+	case in <- js:
+		p.enqueued.Add(uint64(n))
+		p.queued.Add(int64(n))
 		return nil
 	default:
 	}
 	select {
-	case in <- j:
-		p.enqueued.Add(1)
+	case in <- js:
+		p.enqueued.Add(uint64(n))
+		p.queued.Add(int64(n))
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+var jobPool = sync.Pool{New: func() any { s := make([]job, 0, BatchCap); return &s }}
+
+func (p *Pipe) getJobs() []job { return (*jobPool.Get().(*[]job))[:0] }
+
+// putJobs returns a consumed run to the pool. Single-transaction runs from
+// EnqueueOwned are left to the collector.
+func (p *Pipe) putJobs(js []job) {
+	if cap(js) < BatchCap {
+		return
+	}
+	clear(js) // drop the references to transaction bytes
+	js = js[:0]
+	jobPool.Put(&js)
 }
 
 // Run consumes the queues until ctx is cancelled, then flushes what it holds.
@@ -257,7 +335,7 @@ func (p *Pipe) Run(ctx context.Context) error {
 	var bwg sync.WaitGroup
 	for _, in := range p.ins {
 		bwg.Add(1)
-		go func(in chan job) {
+		go func(in chan []job) {
 			defer bwg.Done()
 			p.runBuilder(ctx, in)
 		}(in)
@@ -267,7 +345,7 @@ func (p *Pipe) Run(ctx context.Context) error {
 }
 
 // runBuilder is one builder's accumulate/seal loop over its own queue.
-func (p *Pipe) runBuilder(ctx context.Context, in chan job) {
+func (p *Pipe) runBuilder(ctx context.Context, in chan []job) {
 	cur := p.newBatch()
 	linger := time.NewTimer(time.Hour)
 	linger.Stop()
@@ -291,6 +369,7 @@ func (p *Pipe) runBuilder(ctx context.Context, in chan job) {
 			defer p.wg.Done()
 			defer func() { <-p.sem }()
 			p.submit(ctx, b)
+			p.recycle(b)
 		}()
 	}
 
@@ -316,18 +395,26 @@ func (p *Pipe) runBuilder(ctx context.Context, in chan job) {
 		}
 	}
 
+	addRun := func(js []job) {
+		p.queued.Add(-int64(len(js)))
+		for _, j := range js {
+			add(j)
+		}
+		p.putJobs(js)
+	}
+
 	for {
 		select {
-		case j := <-in:
-			add(j)
+		case js := <-in:
+			addRun(js)
 			// Greedy drain: one selectgo wake services everything already
-			// queued, so the per-transaction cost of this loop is a plain
-			// channel receive, not a select.
+			// queued, so the per-run cost of this loop is a plain channel
+			// receive, not a select.
 		drain:
 			for {
 				select {
-				case j := <-in:
-					add(j)
+				case js := <-in:
+					addRun(js)
 				default:
 					break drain
 				}
@@ -341,9 +428,12 @@ func (p *Pipe) runBuilder(ctx context.Context, in chan job) {
 			// submissions so accepted counts are honest at shutdown.
 			for {
 				select {
-				case j := <-in:
-					cur.body.Write(j.raw)
-					cur.jobs = append(cur.jobs, j)
+				case js := <-in:
+					p.queued.Add(-int64(len(js)))
+					for _, j := range js {
+						cur.body.Write(j.raw)
+						cur.jobs = append(cur.jobs, j)
+					}
 				default:
 					seal(&p.sealLinger)
 					p.wg.Wait()
@@ -355,7 +445,35 @@ func (p *Pipe) runBuilder(ctx context.Context, in chan job) {
 }
 
 func (p *Pipe) newBatch() *batch {
-	return &batch{ids: make(map[hashid.Hash]struct{}, p.cfg.BatchTxs)}
+	if b, ok := p.pool.Get().(*batch); ok {
+		return b
+	}
+	b := &batch{
+		ids:  make(map[hashid.Hash]struct{}, p.cfg.BatchTxs),
+		jobs: make([]job, 0, p.cfg.BatchTxs),
+	}
+	b.body.Grow(min(p.cfg.BatchBytes, p.cfg.BatchTxs*bodyHintPerTx))
+	return b
+}
+
+// bodyHintPerTx sizes a fresh batch body; a pooled body keeps whatever
+// capacity it grew to.
+const bodyHintPerTx = 512
+
+// recycle returns a settled batch to the pool. Nothing may reference b, its
+// jobs or its body afterwards: submit copies what a retry keeps. A body that
+// grew far past the hint (very large transactions) is left to the collector
+// so the pool cannot pin it.
+func (p *Pipe) recycle(b *batch) {
+	if b.body.Cap() > 4*p.cfg.BatchTxs*bodyHintPerTx {
+		return
+	}
+	clear(b.jobs) // drop the references to transaction bytes
+	b.jobs = b.jobs[:0]
+	clear(b.ids)
+	b.body.Reset()
+	b.born = time.Time{}
+	p.pool.Put(b)
 }
 
 // submit ships one batch and classifies the outcome.
@@ -426,7 +544,7 @@ func (p *Pipe) submit(ctx context.Context, b *batch) {
 	// body, one poisonous member) does not mean the others are unacceptable.
 	if p.cfg.RetryAttempts > 0 {
 		p.log.Warn("txpipe: batch failed on all endpoints; salvaging as one retry batch", "txs", n)
-		jobs := b.jobs
+		jobs := append([]job(nil), b.jobs...) // b is recycled when submit returns
 		p.wg.Add(1)
 		go func() {
 			defer p.wg.Done()
@@ -810,10 +928,7 @@ type Stats struct {
 
 // Stats returns a snapshot of the pipe's counters.
 func (p *Pipe) Stats() Stats {
-	q := 0
-	for _, in := range p.ins {
-		q += len(in)
-	}
+	q := int(max(p.queued.Load(), 0))
 	return Stats{
 		Enqueued: p.enqueued.Load(), Accepted: p.accepted.Load(),
 		Rejected: p.rejected.Load(), Failed: p.failed.Load(),

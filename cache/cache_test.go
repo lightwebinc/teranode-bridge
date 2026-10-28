@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/lightwebinc/shard-common/objfmt"
 )
@@ -105,5 +106,32 @@ func TestReaderAliasSurvivesInCache(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("cached object corrupted by later reads on the same connection:\n want %x\n got  %x", want[:16], got[:16])
+	}
+}
+
+// TestGenerationalAdmitReportsDuplicates pins the tx lane's re-delivery check:
+// a key held in either generation is refused and counted. Keys are txids, so
+// a duplicate always carries identical bytes.
+func TestGenerationalAdmitReportsDuplicates(t *testing.T) {
+	g := NewGenerational(Options{MaxBytes: 1 << 20, TTL: time.Hour})
+	k := Key{1}
+	if !g.Admit(k, []byte("tx-bytes")) {
+		t.Fatal("first admission refused")
+	}
+	if g.Admit(k, []byte("tx-bytes")) {
+		t.Fatal("duplicate in the current generation admitted")
+	}
+	s := g.shardOf(k)
+	s.mu.Lock()
+	s.rotateLocked(time.Now()) // the entry is now in the previous generation
+	s.mu.Unlock()
+	if g.Admit(k, []byte("tx-bytes")) {
+		t.Fatal("duplicate held in the previous generation admitted")
+	}
+	if b, _, ok := g.Get(k); !ok || string(b) != "tx-bytes" {
+		t.Fatalf("held body = %q, %v", b, ok)
+	}
+	if st := g.Stats(); st.Duplicates != 2 || st.Stored != 1 || st.Bytes != int64(len("tx-bytes")) {
+		t.Fatalf("stats = %+v, want 2 duplicates, 1 stored, %d bytes", st, len("tx-bytes"))
 	}
 }

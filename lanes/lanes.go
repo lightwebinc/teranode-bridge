@@ -37,6 +37,18 @@ type Handler func(ctx context.Context, obj []byte) error
 // sender's bug, an error is ours or the cluster's.
 var ErrReject = errors.New("rejected")
 
+// Session is a per-connection handler pair. Handle receives each object;
+// Flush is called whenever the lane is about to block on the network (the
+// reader holds no further whole object) and when the connection ends. A
+// handler can therefore pass work on in runs without delaying any of it: at
+// high rates a run is many objects, and an object that arrives alone is
+// flushed before the lane waits for the next. A Flush error ends the
+// connection.
+type Session struct {
+	Handle Handler
+	Flush  func(ctx context.Context) error
+}
+
 // Lane is one class listener.
 type Lane struct {
 	Name   string // "tx" | "subtree" | "block"
@@ -45,7 +57,20 @@ type Lane struct {
 	Handle Handler
 	Log    *slog.Logger
 
+	// NewSession, when set, is called once per connection and its Session
+	// replaces Handle for that connection.
+	NewSession func() Session
+
 	MaxObject int // 0 = codec default
+
+	// Owned makes Handle receive an object the handler may retain: a copy in a
+	// per-connection slab that is never reused, instead of a slice aliasing the
+	// reader's buffer that dies at the next read. On the tx lane this replaces
+	// one heap allocation per transaction (the dominant allocation count, and
+	// what the garbage collector then has to mark) with one per slab. A slab
+	// stays alive while any object in it is referenced, which for a cache that
+	// ages out in arrival order costs at most about one slab per connection.
+	Owned bool
 
 	// SizeHistogram enables the per-object size distribution on this lane.
 	// Off by default on the tx lane: the lane bytes counter already gives the
@@ -58,6 +83,34 @@ type Lane struct {
 	listener net.Listener
 	bound    atomic.Bool
 	counts   Counters
+
+	// Objects and bytes are counted per connection (the hot path then never
+	// shares a cache line between connection goroutines) and summed at Stats
+	// time; counts.Objects/Bytes hold the totals of connections already closed.
+	liveMu sync.Mutex
+	live   map[*connCounts]struct{}
+}
+
+// connCounts are one connection's object and byte totals.
+type connCounts struct {
+	objects, bytes atomic.Uint64
+}
+
+func (l *Lane) addLive(c *connCounts) {
+	l.liveMu.Lock()
+	if l.live == nil {
+		l.live = make(map[*connCounts]struct{})
+	}
+	l.live[c] = struct{}{}
+	l.liveMu.Unlock()
+}
+
+func (l *Lane) retireLive(c *connCounts) {
+	l.liveMu.Lock()
+	delete(l.live, c)
+	l.counts.Objects.Add(c.objects.Load())
+	l.counts.Bytes.Add(c.bytes.Load())
+	l.liveMu.Unlock()
 }
 
 // Bound reports whether the lane's listener is open. Readiness gates on it:
@@ -93,16 +146,82 @@ type Stats struct {
 
 // Stats returns a snapshot of this lane's counters.
 func (l *Lane) Stats() Stats {
+	l.liveMu.Lock()
+	objects, bytes := l.counts.Objects.Load(), l.counts.Bytes.Load()
+	for c := range l.live {
+		objects += c.objects.Load()
+		bytes += c.bytes.Load()
+	}
+	l.liveMu.Unlock()
 	return Stats{
 		Name:     l.Name,
 		Conns:    l.counts.Conns.Load(),
 		Active:   l.counts.Active.Load(),
-		Objects:  l.counts.Objects.Load(),
-		Bytes:    l.counts.Bytes.Load(),
+		Objects:  objects,
+		Bytes:    bytes,
 		Errors:   l.counts.Errors.Load(),
 		Dropped:  l.counts.Dropped.Load(),
 		Rejected: l.counts.Rejected.Load(),
 	}
+}
+
+// flushReader runs a session's Flush before each read of the connection.
+type flushReader struct {
+	r     io.Reader
+	ctx   context.Context
+	flush func(context.Context) error
+}
+
+func (f *flushReader) Read(p []byte) (int, error) {
+	if err := f.flush(f.ctx); err != nil {
+		return 0, err
+	}
+	return f.r.Read(p)
+}
+
+// slabSize is the per-connection arena an Owned lane copies objects into.
+// Objects larger than an eighth of it get their own allocation.
+const slabSize = 1 << 20
+
+// owner hands out retained copies of objects from per-connection slabs.
+type owner struct{ slab []byte }
+
+func (o *owner) own(obj []byte) []byte {
+	n := len(obj)
+	if n > slabSize/8 {
+		b := make([]byte, n)
+		copy(b, obj)
+		return b
+	}
+	if cap(o.slab)-len(o.slab) < n {
+		o.slab = make([]byte, 0, slabSize)
+	}
+	off := len(o.slab)
+	o.slab = append(o.slab, obj...)
+	// Full slice expression: a handler appending to its object must reallocate
+	// rather than write into the next object's bytes.
+	return o.slab[off : off+n : off+n]
+}
+
+// coarseNow is the Unix second, refreshed four times a second by one ticker,
+// so the per-object "last object" stamp costs an atomic load instead of a
+// clock read and a labelled-metric lookup.
+var (
+	coarseNow     atomic.Int64
+	coarseNowOnce sync.Once
+)
+
+func startCoarseClock() {
+	coarseNowOnce.Do(func() {
+		coarseNow.Store(time.Now().Unix())
+		go func() {
+			t := time.NewTicker(250 * time.Millisecond)
+			defer t.Stop()
+			for now := range t.C {
+				coarseNow.Store(now.Unix())
+			}
+		}()
+	})
 }
 
 // Serve listens and handles connections until ctx is cancelled.
@@ -113,6 +232,7 @@ func (l *Lane) Serve(ctx context.Context) error {
 		return fmt.Errorf("lane %s: listen %s: %w", l.Name, l.Addr, err)
 	}
 	l.listener = ln
+	startCoarseClock()
 	l.bound.Store(true)
 	defer l.bound.Store(false)
 	l.Log.Info("lane listening", "lane", l.Name, "addr", l.Addr)
@@ -173,10 +293,30 @@ func (l *Lane) serveConn(ctx context.Context, conn net.Conn) {
 		_ = tc.SetKeepAlivePeriod(30 * time.Second)
 	}
 
-	rd := objfmt.NewReader(conn, l.Class)
+	handle := l.Handle
+	var src io.Reader = conn
+	if l.NewSession != nil {
+		sess := l.NewSession()
+		handle = sess.Handle
+		if sess.Flush != nil {
+			// The reader only reads when it holds no whole object, so flushing
+			// in front of every read hands on everything decoded so far before
+			// the lane can block.
+			src = &flushReader{r: conn, ctx: ctx, flush: sess.Flush}
+			defer func() { _ = sess.Flush(ctx) }()
+		}
+	}
+	rd := objfmt.NewReader(src, l.Class)
 	if l.MaxObject > 0 {
 		rd.SetMaxObject(l.MaxObject)
 	}
+
+	cc := &connCounts{}
+	l.addLive(cc)
+	defer l.retireLive(cc)
+	stamp := obs.LastObjectTime.WithLabelValues(l.Name)
+	var lastStamp int64
+	var own owner
 
 	var onConn uint64
 	for {
@@ -227,14 +367,20 @@ func (l *Lane) serveConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		onConn++
-		l.counts.Objects.Add(1)
-		l.counts.Bytes.Add(uint64(len(obj)))
-		obs.Stamp(obs.LastObjectTime, l.Name)
+		cc.objects.Add(1)
+		cc.bytes.Add(uint64(len(obj)))
+		if sec := coarseNow.Load(); sec != lastStamp {
+			stamp.Set(float64(sec))
+			lastStamp = sec
+		}
 		if l.SizeHistogram {
 			obs.ObjectBytes.WithLabelValues(l.Name).Observe(float64(len(obj)))
 		}
+		if l.Owned {
+			obj = own.own(obj)
+		}
 
-		if err := l.Handle(ctx, obj); err != nil {
+		if err := handle(ctx, obj); err != nil {
 			if errors.Is(err, ErrReject) {
 				l.counts.Rejected.Add(1)
 				l.Log.Warn("lane object refused", "lane", l.Name, "remote", remote,

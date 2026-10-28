@@ -190,6 +190,9 @@ type Stats struct {
 	Entries                                int
 	Bytes, MaxBytes                        int64
 	Stored, Hits, Misses, Evicted, Expired uint64
+	// Duplicates counts admissions refused because the key was already held
+	// (Generational.Admit). Always zero for Cache.
+	Duplicates uint64
 }
 
 // Stats returns a snapshot of the cache's size and counters, aggregated over

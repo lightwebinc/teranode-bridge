@@ -35,7 +35,7 @@ type gshard struct {
 	rotated   time.Time
 	now       func() time.Time
 
-	stored, hits, misses, evicted uint64
+	stored, hits, misses, evicted, duplicates uint64
 }
 
 // NewGenerational returns a generational cache. MaxBytes bounds the LIVE total
@@ -79,6 +79,18 @@ func (s *gshard) rotateLocked(now time.Time) {
 
 // PutOwned stores body without copying; ownership transfers to the cache.
 func (g *Generational) PutOwned(key Key, _ string, body []byte) {
+	g.Admit(key, body)
+}
+
+// Admit stores body without copying unless key is already held in either
+// generation, and reports whether it was new. A false return is a duplicate:
+// the tx lane's re-delivery check (A/B failover, reconnect resend) rides on
+// the lookup the insert needs anyway, so transactions never enter the
+// bridge's seen-registry, whose subtree and block entries are the reverse
+// path's origin filter and must not be flushed by transaction churn.
+// The caller must not mutate body afterwards either way: a duplicate held in
+// the current generation is replaced by it (the bytes are identical).
+func (g *Generational) Admit(key Key, body []byte) bool {
 	s := g.shardOf(key)
 	now := s.now()
 	s.mu.Lock()
@@ -86,12 +98,24 @@ func (g *Generational) PutOwned(key Key, _ string, body []byte) {
 	if now.Sub(s.rotated) >= s.ttl/2 || s.curBytes >= s.maxBytes {
 		s.rotateLocked(now)
 	}
-	if _, ok := s.cur[key]; ok {
-		return
+	// Two map probes for a new key, not three: the older generation is
+	// checked first, then the insert itself reports a key already held in the
+	// current one (the map does not grow). Overwriting such a duplicate stores
+	// identical bytes, and at a million admissions a second the probe saved is
+	// a cache miss saved.
+	if _, ok := s.prev[key]; ok {
+		s.duplicates++
+		return false
 	}
+	n := len(s.cur)
 	s.cur[key] = body
+	if len(s.cur) == n {
+		s.duplicates++
+		return false
+	}
 	s.curBytes += int64(len(body))
 	s.stored++
+	return true
 }
 
 // Put stores a copy of body (for callers whose slice aliases a reader buffer).
@@ -141,6 +165,7 @@ func (g *Generational) Stats() Stats {
 		st.Hits += s.hits
 		st.Misses += s.misses
 		st.Evicted += s.evicted
+		st.Duplicates += s.duplicates
 		s.mu.Unlock()
 	}
 	return st

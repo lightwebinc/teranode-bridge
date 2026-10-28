@@ -254,8 +254,14 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 
 	if src.Seen != nil {
 		s := src.Seen.Stats()
+		dups := s.Hits
+		if src.Txs != nil {
+			// Transactions are de-duplicated by the tx cache's admission, not
+			// the registry; the series keeps counting every re-delivery.
+			dups += src.Txs.Stats().Duplicates
+		}
 		gauge(registryEntries, float64(s.Entries))
-		counter(registryDups, float64(s.Hits))
+		counter(registryDups, float64(dups))
 	}
 
 	if src.Tx != nil {

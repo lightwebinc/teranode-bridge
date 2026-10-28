@@ -170,10 +170,16 @@ start.
 The tx lane never submits synchronously: objects are enqueued to a batching
 pipeline that ships them on propagation's `POST /txs` endpoint (effective caps:
 1023 txs / 32 MiB per request). The lane read loop's only costs are parse, hash,
-one copy, and an enqueue — measured at >1.4M tx/s sustained on a 2×18-core host
-against a mock sink, with backpressure (a full queue blocks the lane, which
-closes the TCP window) bounding memory when the cluster is slower than the
-fabric.
+a copy into a per-connection slab, the tx cache admission, and one channel send
+per run of up to 64 transactions, with backpressure (a full queue blocks the
+lane, which closes the TCP window) bounding memory when the cluster is slower
+than the fabric. Measured on an 8-core (16-thread) host that also ran the
+delivering edge and a propagation stand-in: 1.6M tx/s of 500-byte
+transactions over eight lane connections at about 3.7 µs of bridge CPU per
+transaction, with `-tx-builders 4 -tx-inflight 16 -tx-batch 1023`. At such rates
+raise `-tx-inflight` and `-tx-batch` from their defaults: fewer, larger requests
+cost less per transaction, and more lane connections spread the per-connection
+read and admission work across cores.
 
 | Flag              | Default   | Value | Description                                                                        |
 | ----------------- | --------- | ----- | ---------------------------------------------------------------------------------- |
@@ -181,7 +187,7 @@ fabric.
 | `-tx-batch-bytes` | `8388608` | `8388608` | Batch body ceiling (capped under the server's 32 MiB).                             |
 | `-tx-linger`      | `2ms`     | `2ms` | Max age of a non-full batch — bounds added latency when quiet.                     |
 | `-tx-inflight`    | `4`       | `4` | Concurrent batch requests. Throughput ≈ inflight × batch / RTT.                    |
-| `-tx-builders`    | `4`       | `4` | Parallel batch builders (power of two, ≤16); txs route to builders by txid.        |
+| `-tx-builders`    | `4`       | `4` | Parallel batch builders (power of two, ≤16); lane runs go to builders round robin. |
 | `-tx-retries`     | `3`       | `3` | Per-tx retries for failures that resolve with time (missing parent). `0` disables. |
 
 Three contract details worth knowing:
@@ -257,9 +263,11 @@ payload in heap and collapses into continuous GC. Entry lifetime is between
 TTL/2 and TTL — a recency window, which is exactly the subtree_data fallback's
 need. The subtree/block cache keeps precise LRU+TTL semantics.
 
-The seen-registry (duplicate suppression, the reverse path's origin filter and
-echo detection) is generational the same way: 30-minute nominal TTL, 2²⁰
-entries; not currently configurable. A second registry with the same settings
+The seen-registry (duplicate suppression for subtrees and blocks, the reverse
+path's origin filter and echo detection) is generational the same way:
+30-minute nominal TTL, 2²⁰ entries; not currently configurable. Transactions are
+de-duplicated by the tx cache's admission instead and never enter the
+registry, so its window is not shortened by transaction volume. A second registry with the same settings
 records which objects the cluster has actually been **told** about, and only a
 successful announce writes to it — which is what makes a failed announce
 re-announce on the next redelivery instead of leaving the object cached and

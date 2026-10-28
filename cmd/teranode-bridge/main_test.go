@@ -62,36 +62,51 @@ func txFixtures(t *testing.T) (*cache.Generational, *registry.Registry) {
 
 // TestHandleTxRefusesStandardFormat pins the TX lane's admission rule: the lane
 // carries BRC-30 EF only, so a BRC-12 standard transaction is refused before it
-// can take a cache slot or a registry entry — the latter would suppress the EF
-// copy of the same transaction as a duplicate.
+// can take a cache slot, which would suppress the EF copy of the same
+// transaction as a duplicate.
 func TestHandleTxRefusesStandardFormat(t *testing.T) {
-	txs, seen := txFixtures(t)
+	txs, _ := txFixtures(t)
 
-	err := handleTx(context.Background(), stdTx(), txs, seen, nil)
+	err := handleTx(context.Background(), stdTx(), txs, nil)
 	if !errors.Is(err, lanes.ErrReject) {
 		t.Fatalf("standard tx must be refused with ErrReject, got %v", err)
 	}
 	if n := txs.Stats().Entries; n != 0 {
 		t.Fatalf("refused tx must not be cached, got %d entries", n)
 	}
-	if n := seen.Stats().Entries; n != 0 {
-		t.Fatalf("refused tx must not enter the registry, got %d entries", n)
-	}
 }
 
 // TestHandleTxAcceptsEF is the other half: the same transaction in extended
-// format is cached and registered.
+// format is cached, and a second delivery of it is recognised as a duplicate.
 func TestHandleTxAcceptsEF(t *testing.T) {
-	txs, seen := txFixtures(t)
+	txs, _ := txFixtures(t)
 
-	if err := handleTx(context.Background(), efTx(), txs, seen, nil); err != nil {
+	if err := handleTx(context.Background(), efTx(), txs, nil); err != nil {
 		t.Fatalf("EF tx must be accepted: %v", err)
 	}
 	if n := txs.Stats().Entries; n != 1 {
 		t.Fatalf("EF tx must be cached, got %d entries", n)
 	}
-	if n := seen.Stats().Entries; n != 1 {
-		t.Fatalf("EF tx must enter the registry, got %d entries", n)
+	if err := handleTx(context.Background(), efTx(), txs, nil); err != nil {
+		t.Fatalf("redelivered EF tx: %v", err)
+	}
+	if st := txs.Stats(); st.Entries != 1 || st.Duplicates != 1 {
+		t.Fatalf("redelivery must be a duplicate: entries %d duplicates %d", st.Entries, st.Duplicates)
+	}
+}
+
+// TestHandleTxStaysOutOfSeen pins why transactions are de-duplicated by the tx
+// cache and not the seen-registry: the registry's subtree and block entries are
+// the reverse path's origin filter, and its capacity is shared, so a
+// transaction stream would rotate them out within seconds and the bridge would
+// republish remote subtrees as its own.
+func TestHandleTxStaysOutOfSeen(t *testing.T) {
+	txs, seen := txFixtures(t)
+	if err := handleTx(context.Background(), efTx(), txs, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := seen.Stats().Entries; n != 0 {
+		t.Fatalf("transactions must not enter the seen-registry, got %d entries", n)
 	}
 }
 

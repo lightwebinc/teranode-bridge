@@ -594,3 +594,71 @@ func TestPartial422SettlesPerMember(t *testing.T) {
 		t.Fatalf("retry_accepted = %d, want 1", s.RetryAccepted)
 	}
 }
+
+// TestBatchRunsDeliverEverything pins the run hand-off the tx lane uses: runs
+// of up to BatchCap transactions, flushed whole or partial, reach the cluster
+// exactly once each, and the queue depth returns to zero.
+func TestBatchRunsDeliverEverything(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		for _, tx := range splitBody(t, body) {
+			seen[string(tx)]++
+		}
+		mu.Unlock()
+		_, _ = w.Write([]byte("OK"))
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{Endpoints: []string{srv.URL}, BatchTxs: 50, Linger: 5 * time.Millisecond,
+		Inflight: 4, Builders: 4}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { _ = p.Run(ctx); close(done) }()
+
+	const total = 1000
+	run := p.NewBatch()
+	for i := 0; i < total; i++ {
+		var prev [32]byte
+		prev[0], prev[1] = byte(i), byte(i>>8)
+		tx := rawTx(prev, byte(i))
+		if run.Add(tx, txidOf(t, tx)) {
+			if err := run.Flush(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if i%97 == 0 { // partial runs, as when the lane is about to block
+			if err := run.Flush(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := run.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if run.Len() != 0 {
+		t.Fatalf("flushed run still holds %d", run.Len())
+	}
+	waitFor(t, func() bool { return p.Stats().Accepted == total })
+	if s := p.Stats(); s.Enqueued != total || s.Queue != 0 {
+		t.Fatalf("enqueued %d queue %d, want %d and 0", s.Enqueued, s.Queue, total)
+	}
+	cancel()
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != total {
+		t.Fatalf("cluster saw %d distinct txs, want %d", len(seen), total)
+	}
+	for _, n := range seen {
+		if n != 1 {
+			t.Fatal("a transaction was submitted more than once")
+		}
+	}
+}
