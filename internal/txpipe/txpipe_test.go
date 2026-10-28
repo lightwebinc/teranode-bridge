@@ -662,3 +662,61 @@ func TestBatchRunsDeliverEverything(t *testing.T) {
 		}
 	}
 }
+
+// TestThresholdExceededIsRetried pins current Teranode main's overload class:
+// propagation names a member THRESHOLD_EXCEEDED when block assembly sheds it
+// (stored, not yet in a template; a resubmit re-drives it), and aggregates the
+// batch to 500 because that class is a 5xx. The member must go back on the
+// retry ladder, not be booked rejected.
+func TestThresholdExceededIsRetried(t *testing.T) {
+	a := rawTx([32]byte{61}, 61)
+	b := rawTx([32]byte{62}, 62)
+	bID := txidOf(t, b).Display()
+
+	var mu sync.Mutex
+	var bodies [][]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var ids []string
+		for _, tx := range splitBody(t, raw) {
+			ids = append(ids, txidOf(t, tx).Display())
+		}
+		mu.Lock()
+		bodies = append(bodies, ids)
+		first := len(bodies) == 1
+		mu.Unlock()
+		if !first {
+			_, _ = w.Write([]byte("OK")) // block assembly caught up
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(w, "Failed to process transactions:\n"+
+			"THRESHOLD_EXCEEDED (2): [ProcessTransaction][%s] block assembly ingest queue full\n", bID)
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		Endpoints: []string{srv.URL},
+		BatchTxs:  10, Linger: 5 * time.Millisecond, Inflight: 1, Builders: 1, RetryAttempts: 6,
+	}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = p.Run(ctx) }()
+	for _, tx := range [][]byte{a, b} {
+		if err := p.Enqueue(ctx, tx, txidOf(t, tx)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, func() bool { return p.Stats().Accepted == 2 })
+	if s := p.Stats(); s.Rejected != 0 || s.RetryAccepted != 1 {
+		t.Fatalf("rejected %d retry_accepted %d, want 0 and 1", s.Rejected, s.RetryAccepted)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 || len(bodies[1]) != 1 || bodies[1][0] != bID {
+		t.Fatalf("requests %v, want the batch then a retry of only %s", bodies, bID)
+	}
+}

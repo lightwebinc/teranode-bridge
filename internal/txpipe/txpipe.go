@@ -567,6 +567,17 @@ func isMissingParent(line string) bool {
 	return strings.Contains(line, "MISSING_PARENT") || strings.Contains(strings.ToLower(line), "missing parent")
 }
 
+// isRetryable reports whether a failure line describes a failure that
+// resolves with time, so its transaction goes back on the retry ladder: a
+// missing parent, or THRESHOLD_EXCEEDED, which propagation answers when block
+// assembly sheds load. That transaction is stored but not yet in a block
+// template, and a resubmit re-drives the hand-off; Teranode itself classifies
+// it as a retryable overload (503 on POST /tx). Every other named failure is
+// final.
+func isRetryable(line string) bool {
+	return isMissingParent(line) || strings.Contains(line, "THRESHOLD_EXCEEDED")
+}
+
 // namesMember reports whether a partial-failure body attributes at least one
 // line to a transaction. One that names nobody cannot be settled per member, so
 // it keeps the whole-batch handling.
@@ -595,7 +606,7 @@ func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
 		mine[j.id.Display()] = struct{}{}
 	}
 
-	failedIDs := make(map[string]bool) // txid -> retryable (missing parent)
+	failedIDs := make(map[string]bool) // txid -> retryable (missing parent, threshold exceeded)
 	unattributed := 0
 	for _, line := range strings.Split(body, "\n") {
 		id, ok := p.subjectTxID(line)
@@ -603,7 +614,7 @@ func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
 			continue // not a per-transaction error line
 		}
 		if _, ours := mine[id]; ours {
-			failedIDs[id] = isMissingParent(line)
+			failedIDs[id] = isRetryable(line)
 			continue
 		}
 		unattributed++
@@ -736,7 +747,7 @@ func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 			named := make(map[string]bool)
 			for _, line := range strings.Split(respBody, "\n") {
 				if id, ok := p.subjectTxID(line); ok {
-					named[id] = isMissingParent(line)
+					named[id] = isRetryable(line)
 				}
 			}
 			next := pending[:0:0]

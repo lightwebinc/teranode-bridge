@@ -188,7 +188,7 @@ read and admission work across cores.
 | `-tx-linger`      | `2ms`     | `2ms` | Max age of a non-full batch — bounds added latency when quiet.                     |
 | `-tx-inflight`    | `4`       | `4` | Concurrent batch requests. Throughput ≈ inflight × batch / RTT.                    |
 | `-tx-builders`    | `4`       | `4` | Parallel batch builders (power of two, ≤16); lane runs go to builders round robin. |
-| `-tx-retries`     | `3`       | `3` | Per-tx retries for failures that resolve with time (missing parent). `0` disables. |
+| `-tx-retries`     | `3`       | `3` | Per-tx retries for failures that resolve with time (missing parent, `THRESHOLD_EXCEEDED`). `0` disables. |
 
 Three contract details worth knowing:
 
@@ -205,6 +205,12 @@ Three contract details worth knowing:
   when a dependency lands in it, so same-builder chains never violate the
   contract; cross-builder and cross-connection races fall to the bounded retry
   (`422` = missing parent, the only use of that status).
+- **Overload**: when block assembly sheds load, propagation names the member
+  `THRESHOLD_EXCEEDED` (Teranode stores it but has not yet put it in a
+  template, and maps the class to a retryable `503`; in a batch the 5xx makes
+  the whole answer `500`). Those members go back on the same retry ladder as a
+  missing parent instead of being booked rejected. Checked against Teranode
+  main at 7cc6949 (2026-10-27).
 - **Partial failure**: a batch answering `500 Failed to process transactions`
   had its other members processed; the failed txids are parsed from the error
   lines and retried together as one further batch (bounded by `-tx-inflight`).
@@ -278,7 +284,7 @@ invisible.
 
 | Flag            | Default     | Value | Description                                                                                              |
 | --------------- | ----------- | ----- | -------------------------------------------------------------------------------------------------------- |
-| `-mode`         | `all`       | `all` | `all` = full bridge. `sink` = receive, parse, verify and count only, with no cluster targets.            |
+| `-mode`         | `all`       | `all` | `all` = full bridge. `tx` = the transaction lane into propagation only: no Kafka, no retrieval plane, no subtree or block lanes, and no tx cache unless `-tx-cache-bytes` is set; requires only `-propagation`. For a cluster whose subtrees and blocks stay on libp2p. `sink` = receive, parse, verify and count only, with no cluster targets. |
 | `-stats-every`  | `1m`        | `1m` | Interval between stats blocks. `0` disables periodic stats (a final block is still emitted at shutdown). |
 | `-metrics-addr` | `[::]:9146` | `[::]:9146` | HTTP listener for `/metrics`, `/health*`, `/healthz`, `/readyz`, `/loglevel`, `/debug/pprof`. Empty disables it. |
 | `-log-level`    | `info`      | `info` | `debug` \| `info` \| `warn` \| `error`. Runtime-changeable via `POST /loglevel` and `SIGHUP`.            |

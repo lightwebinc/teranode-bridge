@@ -194,9 +194,10 @@ robin, single enqueues route by txid). The `/txs` contract — a
 request must not contain both a parent and its child, because in-batch
 processing is concurrent — is enforced structurally: each transaction's input
 outpoints are walked, and a dependency on the open batch seals it first.
-Failures that resolve with time (`422`, missing parent — the only use of that
-status) retry as a single further batch on a short ladder, bounded by the same
-inflight semaphore; merit rejections do not.
+Failures that resolve with time (`422`, missing parent, the only use of that
+status; and `THRESHOLD_EXCEEDED`, block assembly shedding load) retry as a
+single further batch on a short ladder, bounded by the same inflight
+semaphore; merit rejections do not.
 
 ## Submitting transactions — single (legacy detail)
 

@@ -486,3 +486,27 @@ func TestHandleTxWithoutCache(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestModeFlags pins what each mode requires: the full bridge announces and
+// needs the announce flags; -mode tx needs only a propagation endpoint and
+// refuses a reverse path it has no lanes for; an unknown mode is refused.
+func TestModeFlags(t *testing.T) {
+	if msg := modeFlagsErr("tx", 1, 0, "", "", ""); msg != "" {
+		t.Fatalf("tx mode with a propagation endpoint refused: %q", msg)
+	}
+	if msg := modeFlagsErr("tx", 0, 0, "", "", ""); msg == "" {
+		t.Fatal("tx mode without a propagation endpoint must be refused")
+	}
+	if msg := modeFlagsErr("tx", 1, 0, "", "", "127.0.0.1:8087"); msg == "" {
+		t.Fatal("tx mode with a reverse path must be refused")
+	}
+	if msg := modeFlagsErr("all", 1, 0, "", "", ""); msg == "" {
+		t.Fatal("the full bridge without kafka and advertise must be refused")
+	}
+	if msg := modeFlagsErr("sink", 0, 0, "", "", ""); msg != "" {
+		t.Fatalf("sink mode refused: %q", msg)
+	}
+	if msg := modeFlagsErr("txonly", 1, 1, "x", "y", ""); msg == "" {
+		t.Fatal("an unknown mode must be refused")
+	}
+}

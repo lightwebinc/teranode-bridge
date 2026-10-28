@@ -52,7 +52,7 @@ Four planes (ingest, cache, retrieval, reverse) run in one process by default
 
 - Go 1.26 or later
 - A reachable Teranode cluster (propagation HTTP, Kafka, asset HTTP, blockchain
-  gRPC) — or `-mode sink`, which needs none of them
+  gRPC); `-mode tx` needs only propagation HTTP, and `-mode sink` none of them
 - Network reachability *from* the cluster back to the bridge's retrieval plane
 
 ## Build
@@ -75,6 +75,9 @@ make ci             # full containerised pipeline
   -advertise        'http://[2001:db8:3f::1]:9145' \
   -propagation      'http://192.0.2.10:20833' \
   -kafka            '192.0.2.10:19092'
+
+# Transaction lane only: subtrees and blocks stay on the cluster's libp2p.
+./teranode-bridge -mode tx -propagation 'http://192.0.2.10:8833'
 
 # Sink: receive, parse, verify and count with no cluster targets at all.
 ./teranode-bridge -mode sink -stats-every 10s

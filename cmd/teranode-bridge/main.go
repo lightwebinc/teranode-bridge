@@ -107,10 +107,10 @@ func main() {
 		bcKeepaliveTimeout = flag.Duration("blockchain-keepalive-timeout", reverse.DefaultKeepaliveTimeout, "how long to wait for a keepalive ping reply before declaring the connection dead")
 		bcPingIdle         = flag.Bool("blockchain-keepalive-when-idle", true, "ping even while no stream is open, matching the cluster's grpc_permit_without_stream default. Set false if the cluster sets that false, or it will GOAWAY the connection between reconnects")
 
-		mode       = flag.String("mode", "all", "all = full bridge; sink = receive, verify and count only (no cluster targets)")
+		mode       = flag.String("mode", "all", "all = full bridge; tx = the transaction lane into propagation only (no Kafka, no retrieval plane, no subtree or block lanes, no tx cache unless -tx-cache-bytes is set): for a cluster whose subtrees and blocks stay on libp2p; sink = receive, verify and count only (no cluster targets)")
 		cacheBytes = flag.Int64("cache-bytes", 1<<30, "object cache ceiling in bytes")
 		cacheTTL   = flag.Duration("cache-ttl", 10*time.Minute, "how long a pushed object stays fetchable")
-		txCache    = flag.Int64("tx-cache-bytes", -1, "transaction cache ceiling in bytes (-1 = -cache-bytes). The tx cache serves subtree members to the cluster's pulls and is the tx lane's re-delivery check. 0 disables it, for a bridge that carries the transaction lane only (subtrees and blocks reach the cluster another way): the bridge then keeps no transaction copies, and a re-delivered transaction reaches propagation, which answers an already-known one with 200")
+		txCache    = flag.Int64("tx-cache-bytes", -1, "transaction cache ceiling in bytes (-1 = -cache-bytes, or off with -mode tx). The tx cache serves subtree members to the cluster's pulls and is the tx lane's re-delivery check. 0 disables it, for a bridge that carries the transaction lane only (subtrees and blocks reach the cluster another way): the bridge then keeps no transaction copies, and a re-delivered transaction reaches propagation, which answers an already-known one with 200")
 		maxObject  = flag.Int("max-object", 0, "per-object size ceiling (0 = codec default)")
 		statsEvery = flag.Duration("stats-every", time.Minute, "interval between stats lines (0 = off)")
 
@@ -125,7 +125,7 @@ func main() {
 		txInflight   = flag.Int("tx-inflight", 4, "concurrent batch submissions in flight")
 		txBuilders   = flag.Int("tx-builders", 4, "parallel batch builders (power of two, max 16)")
 		txQueue      = flag.Int("tx-queue", 8192, "transactions the pipe holds before backpressure blocks the lane read (0 = 8192). This is what absorbs the cluster's stall at a block boundary: measured at 20k tx/s the pipe sat at its 8192 ceiling for seconds around each block, the lane stopped reading, and the edge shed what it could not queue. Size it to stall-seconds x rate; memory is roughly that many transactions")
-		txRetries    = flag.Int("tx-retries", 6, "per-tx retries for failures that resolve with time (missing parent), on a 25ms..3.2s ladder (6 = ~8.5s); 0 = off")
+		txRetries    = flag.Int("tx-retries", 6, "per-tx retries for failures that resolve with time (missing parent, THRESHOLD_EXCEEDED), on a 25ms..3.2s ladder (6 = ~8.5s); 0 = off")
 
 		metricsAddr    = flag.String("metrics-addr", "[::]:9146", "HTTP listener for /metrics, /health*, /healthz, /readyz, /loglevel, /debug/pprof (empty = off)")
 		legacyPrefix   = flag.Bool("metrics-legacy-prefix", true, "also emit every pre-existing series under the old btb_ name alongside teranode_bridge_. On for one release so dashboards survive the cutover; set false once they are migrated")
@@ -178,12 +178,10 @@ func main() {
 	defer func() { _ = shutdownTracing(context.Background()) }()
 
 	sink := *mode == "sink"
-
-	if !sink {
-		if msg := announceFlagsErr(len(propagation), len(brokers), *advertise, *peerID); msg != "" {
-			log.Error(msg)
-			os.Exit(2)
-		}
+	txOnly := *mode == "tx"
+	if msg := modeFlagsErr(*mode, len(propagation), len(brokers), *advertise, *peerID, *blockchain); msg != "" {
+		log.Error(msg)
+		os.Exit(2)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -206,9 +204,9 @@ func main() {
 	// The tx cache is generational, not LRU: at megatransaction-per-second
 	// rates the LRU bookkeeping costs ~5× the payload in heap and its pointer
 	// graph is what the GC scans. See cache.Generational.
-	var txs *cache.Generational // nil: disabled (-tx-cache-bytes 0)
+	var txs *cache.Generational // nil: disabled (-tx-cache-bytes 0, or -mode tx by default)
 	switch {
-	case *txCache < 0:
+	case *txCache < 0 && !txOnly:
 		txs = cache.NewGenerational(cache.Options{MaxBytes: *cacheBytes, TTL: *cacheTTL})
 	case *txCache > 0:
 		txs = cache.NewGenerational(cache.Options{MaxBytes: *txCache, TTL: *cacheTTL})
@@ -258,6 +256,12 @@ func main() {
 			// visible in the pipe's failed/rejected counters.
 			log.Warn("propagation health check failed at startup", "err", err)
 		}
+	}
+	if txOnly {
+		log.Info("bridge starting in transaction-only mode: the tx lane into propagation; no Kafka, no retrieval plane, no subtree or block lanes",
+			"version", Version, "propagation", propagation.String())
+	}
+	if !sink && !txOnly {
 		if producer, err = announce.New(announce.Config{
 			Brokers:      brokers,
 			SubtreeTopic: *subtreeTopic,
@@ -278,7 +282,7 @@ func main() {
 		baseURL = ret.BaseURL(*advertise)
 		log.Info("bridge starting", "version", Version, "mode", *mode, "announce-url", baseURL,
 			"propagation", propagation.String(), "kafka", brokers.String())
-	} else {
+	} else if sink {
 		log.Info("bridge starting in sink mode: objects are received, verified and counted, but not handed to a cluster",
 			"version", Version)
 	}
@@ -307,6 +311,10 @@ func main() {
 				return handleBlock(ctx, obj, objects, seen, announced, ann, baseURL, rec, log)
 			},
 		},
+	}
+
+	if txOnly {
+		laneSet = laneSet[:1] // the tx lane: subtrees and blocks are not this bridge's
 	}
 
 	// Reverse path: publish what this cluster produces back into the fabric.
@@ -462,6 +470,28 @@ func main() {
 // for /headers_from_common_ancestor, 404s, and circuit-breaks the cluster out
 // of recovery (verified at teranode 1cca625). Sink mode neither announces nor
 // needs an identity, so it is exempt.
+// modeFlagsErr validates -mode and the flags each mode requires: the full
+// bridge announces, so it needs the announce flags; -mode tx needs only
+// somewhere to submit, and has no reverse path to configure.
+func modeFlagsErr(mode string, propagationN, brokersN int, advertise, peerID, blockchain string) string {
+	switch mode {
+	case "sink":
+		return ""
+	case "tx":
+		if propagationN == 0 {
+			return "-propagation is required with -mode tx"
+		}
+		if blockchain != "" {
+			return "-blockchain configures the reverse path, which publishes subtrees and blocks; -mode tx carries neither"
+		}
+		return ""
+	case "all":
+		return announceFlagsErr(propagationN, brokersN, advertise, peerID)
+	default:
+		return fmt.Sprintf("-mode %q: want all, tx or sink", mode)
+	}
+}
+
 func announceFlagsErr(propagationN, brokersN int, advertise, peerID string) string {
 	if propagationN == 0 || brokersN == 0 || advertise == "" {
 		return "-propagation, -kafka and -advertise are required unless -mode sink"
