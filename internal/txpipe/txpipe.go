@@ -350,6 +350,11 @@ func (p *Pipe) runBuilder(ctx context.Context, in chan []job) {
 	linger := time.NewTimer(time.Hour)
 	linger.Stop()
 	defer linger.Stop()
+	// Submissions outlive the cancellation: cancelling the pipe means "take no
+	// more and flush", and a batch already sealed, or in flight when the
+	// signal lands, must still reach the cluster. The HTTP client's timeout
+	// and the retry ladder bound how long that takes.
+	sctx := context.WithoutCancel(ctx)
 
 	seal := func(reason *atomic.Uint64) {
 		if len(cur.jobs) == 0 {
@@ -368,7 +373,7 @@ func (p *Pipe) runBuilder(ctx context.Context, in chan []job) {
 		go func() {
 			defer p.wg.Done()
 			defer func() { <-p.sem }()
-			p.submit(ctx, b)
+			p.submit(sctx, b)
 			p.recycle(b)
 		}()
 	}

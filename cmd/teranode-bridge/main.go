@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -35,6 +36,7 @@ import (
 	"github.com/lightwebinc/teranode-bridge/announce"
 	"github.com/lightwebinc/teranode-bridge/cache"
 	"github.com/lightwebinc/teranode-bridge/hashid"
+	"github.com/lightwebinc/teranode-bridge/internal/activation"
 	"github.com/lightwebinc/teranode-bridge/internal/health"
 	"github.com/lightwebinc/teranode-bridge/internal/metrics"
 	"github.com/lightwebinc/teranode-bridge/internal/obs"
@@ -113,6 +115,7 @@ func main() {
 		txCache    = flag.Int64("tx-cache-bytes", -1, "transaction cache ceiling in bytes (-1 = -cache-bytes, or off with -mode tx). The tx cache serves subtree members to the cluster's pulls and is the tx lane's re-delivery check. 0 disables it, for a bridge that carries the transaction lane only (subtrees and blocks reach the cluster another way): the bridge then keeps no transaction copies, and a re-delivered transaction reaches propagation, which answers an already-known one with 200")
 		maxObject  = flag.Int("max-object", 0, "per-object size ceiling (0 = codec default)")
 		statsEvery = flag.Duration("stats-every", time.Minute, "interval between stats lines (0 = off)")
+		drainFor   = flag.Duration("drain-timeout", 5*time.Second, "on SIGTERM, how long each lane connection keeps reading after telling the edge it is closing (FIN), so nothing the edge already sent is lost; the edge stops and redials. With systemd socket activation (FileDescriptorName tx, subtree, block) the redial waits in the kernel's queue for the next process, which makes a restart lossless. 0 closes at once")
 
 		submitGrace = flag.Duration("submitter-grace", 45*time.Second, "after start, wait this long before the reverse path may publish; the registry starts empty, so a bridge that publishes immediately can mistake objects the cluster already held for its own")
 		submitBlind = flag.Bool("submitter-when-blind", false, "publish even while no delivery lane is connected; unsafe unless this cluster is the only publisher, because the origin filter needs a live view of the object plane")
@@ -316,6 +319,19 @@ func main() {
 	if txOnly {
 		laneSet = laneSet[:1] // the tx lane: subtrees and blocks are not this bridge's
 	}
+	// Sockets systemd holds for us (socket activation), by lane name.
+	held, err := activation.Listeners()
+	if err != nil {
+		log.Error("socket activation", "err", err)
+		os.Exit(1)
+	}
+	for _, ln := range laneSet {
+		ln.DrainTimeout = *drainFor
+		if l, ok := held[ln.Name]; ok {
+			ln.Listener = l
+			log.Info("lane socket held by systemd", "lane", ln.Name, "addr", l.Addr().String())
+		}
+	}
 
 	// Reverse path: publish what this cluster produces back into the fabric.
 	var rev *reverse.Subscriber
@@ -404,14 +420,26 @@ func main() {
 	rec.SetChecks(buildChecks(rec, laneSet, ret, producer, rev, propagation, *localAsset, sink, *clusterPoll > 0))
 
 	g, gctx := errgroup.WithContext(ctx)
+	// The lanes stop on the signal and drain; the pipe keeps submitting what
+	// they drain and stops only once every lane has returned.
+	var lanesUp sync.WaitGroup
 	for _, ln := range laneSet {
-		g.Go(func() error { return ln.Serve(gctx) })
+		lanesUp.Add(1)
+		g.Go(func() error {
+			defer lanesUp.Done()
+			return ln.Serve(gctx)
+		})
 	}
 	if ret != nil {
 		g.Go(func() error { return ret.Serve(gctx) })
 	}
 	if pipe != nil {
-		g.Go(func() error { return pipe.Run(gctx) })
+		pipeCtx, pipeStop := context.WithCancel(context.WithoutCancel(gctx))
+		go func() {
+			lanesUp.Wait()
+			pipeStop()
+		}()
+		g.Go(func() error { return pipe.Run(pipeCtx) })
 	}
 	if rev != nil {
 		g.Go(func() error { return rev.Run(gctx) })

@@ -720,3 +720,45 @@ func TestThresholdExceededIsRetried(t *testing.T) {
 		t.Fatalf("requests %v, want the batch then a retry of only %s", bodies, bID)
 	}
 }
+
+// TestCancelFlushesWhatIsQueued pins a lossless stop: cancelling the pipe takes
+// no more work but still submits what it holds, including a batch sealed
+// after the cancellation. Before, the final submissions used the cancelled
+// context and failed, which lost the last transactions of every restart.
+func TestCancelFlushesWhatIsQueued(t *testing.T) {
+	var got atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		time.Sleep(50 * time.Millisecond) // the cancellation lands mid-request
+		got.Add(int64(len(splitBody(t, body))))
+		_, _ = w.Write([]byte("OK"))
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{Endpoints: []string{srv.URL}, BatchTxs: 1000, Linger: time.Hour,
+		Inflight: 2, Builders: 1}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = p.Run(ctx); close(done) }()
+	const n = 300
+	for i := 0; i < n; i++ {
+		var prev [32]byte
+		prev[0], prev[1] = byte(i), byte(i>>8)
+		tx := rawTx(prev, byte(i))
+		if err := p.Enqueue(ctx, tx, txidOf(t, tx)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cancel() // the linger never fires: only the stop can seal this batch
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	if got.Load() != n || p.Stats().Accepted != n {
+		t.Fatalf("cluster got %d, accepted %d; want all %d submitted on the stop", got.Load(), p.Stats().Accepted, n)
+	}
+}

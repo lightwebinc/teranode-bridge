@@ -286,6 +286,7 @@ invisible.
 | --------------- | ----------- | ----- | -------------------------------------------------------------------------------------------------------- |
 | `-mode`         | `all`       | `all` | `all` = full bridge. `tx` = the transaction lane into propagation only: no Kafka, no retrieval plane, no subtree or block lanes, and no tx cache unless `-tx-cache-bytes` is set; requires only `-propagation`. For a cluster whose subtrees and blocks stay on libp2p. `sink` = receive, parse, verify and count only, with no cluster targets. |
 | `-stats-every`  | `1m`        | `1m` | Interval between stats blocks. `0` disables periodic stats (a final block is still emitted at shutdown). |
+| `-drain-timeout` | `5s`      | `5s` | On `SIGTERM`, how long each lane connection keeps reading after sending FIN, so nothing the edge already sent is lost. `0` closes at once. See [systemd unit](#systemd-unit) for lossless restarts. |
 | `-metrics-addr` | `[::]:9146` | `[::]:9146` | HTTP listener for `/metrics`, `/health*`, `/healthz`, `/readyz`, `/loglevel`, `/debug/pprof`. Empty disables it. |
 | `-log-level`    | `info`      | `info` | `debug` \| `info` \| `warn` \| `error`. Runtime-changeable via `POST /loglevel` and `SIGHUP`.            |
 | `-log-format`   | `text`      | `json` | `text` (stderr) or `json` (stdout — the fleet aggregation contract).                                     |
@@ -633,6 +634,29 @@ WantedBy=multi-user.target
 `DynamicUser` is fine: the bridge writes nothing to disk and binds only
 unprivileged ports by default. Give it
 `AmbientCapabilities=CAP_NET_BIND_SERVICE` only if you move a lane below 1024.
+
+**Lossless restarts.** Let systemd hold the lane sockets, so an edge that
+redials during a restart waits in the kernel's accept queue instead of being
+refused. One `.socket` unit per lane, named for the lane; the bridge adopts
+each by its `FileDescriptorName` and listens itself on any lane without one:
+
+```ini
+# teranode-bridge.socket
+[Socket]
+ListenStream=[2001:db8:3f::1]:8725
+FileDescriptorName=tx
+ListenStream=[2001:db8:3f::1]:9143
+FileDescriptorName=subtree
+ListenStream=[2001:db8:3f::1]:9144
+FileDescriptorName=block
+
+[Install]
+WantedBy=sockets.target
+```
+
+Restart the service (`systemctl restart teranode-bridge.service`), never the
+socket. On `SIGTERM` the bridge drains each lane and flushes its pipeline
+before it exits (`-drain-timeout`).
 
 ### Container
 

@@ -370,3 +370,78 @@ func TestSessionFlushesBeforeBlocking(t *testing.T) {
 		})
 	}
 }
+
+// TestDrainKeepsWhatThePeerSent pins the lossless shutdown: on cancellation a
+// draining lane sends FIN and keeps reading, so an object the peer wrote after
+// the cancellation (it had not yet seen the FIN) is still handled, and the
+// lane returns once the peer closes.
+func TestDrainKeepsWhatThePeerSent(t *testing.T) {
+	var c captured
+	l := &Lane{
+		Name: "subtree", Class: objfmt.ClassSubtree, Addr: "127.0.0.1:0",
+		Handle: c.handle(false), Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DrainTimeout: 3 * time.Second,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan struct{})
+	go func() { _ = l.Serve(ctx); close(served) }()
+	waitCond(t, "bound", l.Bound)
+
+	conn, err := net.Dial("tcp", l.ListenerAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := subtreeFrame(1, 3)
+	if _, err := conn.Write(f); err != nil {
+		t.Fatal(err)
+	}
+	waitCond(t, "first object", func() bool { c.mu.Lock(); defer c.mu.Unlock(); return len(c.objs) == 1 })
+
+	cancel()
+	// The peer learns of the shutdown from the FIN...
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if n, err := conn.Read(make([]byte, 1)); n != 0 || err != io.EOF {
+		t.Fatalf("peer read %d, %v; want the lane's FIN (EOF)", n, err)
+	}
+	// ...but what it sends before it closes is still taken.
+	if _, err := conn.Write(subtreeFrame(2, 3)); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	select {
+	case <-served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("lane did not return after the peer closed")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.objs) != 2 {
+		t.Fatalf("handled %d objects, want 2: the drain lost what the peer sent after the FIN", len(c.objs))
+	}
+}
+
+// TestServeUsesHeldListener pins socket activation: a lane given a listener
+// accepts on it instead of opening its own address.
+func TestServeUsesHeldListener(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c captured
+	l := &Lane{
+		Name: "subtree", Class: objfmt.ClassSubtree, Addr: "192.0.2.1:1", Listener: held,
+		Handle: c.handle(false), Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = l.Serve(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitCond(t, "bound", l.Bound)
+	conn, err := net.Dial("tcp", held.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	_, _ = conn.Write(subtreeFrame(5, 2))
+	waitCond(t, "object on the held socket", func() bool { c.mu.Lock(); defer c.mu.Unlock(); return len(c.objs) == 1 })
+}

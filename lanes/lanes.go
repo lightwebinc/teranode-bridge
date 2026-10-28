@@ -61,6 +61,20 @@ type Lane struct {
 	// replaces Handle for that connection.
 	NewSession func() Session
 
+	// Listener, when set, is a socket opened by someone else (systemd socket
+	// activation): Serve accepts on it instead of listening on Addr. Such a
+	// socket outlives the process, so peers that connect during a restart wait
+	// in the kernel's accept queue rather than being refused.
+	Listener net.Listener
+
+	// DrainTimeout, when positive, makes shutdown lossless for what peers have
+	// already sent: on cancellation each connection sends FIN, the peer's
+	// writer sees the close and stops (and, under socket activation, redials
+	// into the queue the next process will accept from), and the lane keeps
+	// reading and handling until the peer closes or the timeout passes. Zero
+	// closes connections at once.
+	DrainTimeout time.Duration
+
 	MaxObject int // 0 = codec default
 
 	// Owned makes Handle receive an object the handler may retain: a copy in a
@@ -226,10 +240,13 @@ func startCoarseClock() {
 
 // Serve listens and handles connections until ctx is cancelled.
 func (l *Lane) Serve(ctx context.Context) error {
-	var lc net.ListenConfig
-	ln, err := lc.Listen(ctx, "tcp", l.Addr)
-	if err != nil {
-		return fmt.Errorf("lane %s: listen %s: %w", l.Name, l.Addr, err)
+	ln := l.Listener
+	if ln == nil {
+		var lc net.ListenConfig
+		var err error
+		if ln, err = lc.Listen(ctx, "tcp", l.Addr); err != nil {
+			return fmt.Errorf("lane %s: listen %s: %w", l.Name, l.Addr, err)
+		}
 	}
 	l.listener = ln
 	startCoarseClock()
@@ -275,16 +292,28 @@ func (l *Lane) serveConn(ctx context.Context, conn net.Conn) {
 	// Closing the listener alone does not end a shutdown: the edge holds these
 	// connections open for the life of the tunnel, so a reader parked in Next()
 	// would block the wait group indefinitely and the process would have to be
-	// killed. Closing the connection is what unblocks it.
+	// killed. Closing the connection is what unblocks it, or, when draining,
+	// a FIN and a read deadline: the peer closes once it sees the FIN, and
+	// everything it wrote before that is still read.
 	done := make(chan struct{})
 	defer close(done)
+	draining := l.DrainTimeout > 0
 	go func() {
 		select {
 		case <-ctx.Done():
+			if tc, ok := conn.(*net.TCPConn); ok && draining {
+				_ = tc.CloseWrite()
+				_ = tc.SetReadDeadline(time.Now().Add(l.DrainTimeout))
+				return
+			}
 			_ = conn.Close()
 		case <-done:
 		}
 	}()
+	// Handlers outlive the cancellation: what is drained must still be handed
+	// on, and the pipe the handlers feed keeps running until every lane has
+	// returned.
+	hctx := context.WithoutCancel(ctx)
 
 	if tc, ok := conn.(*net.TCPConn); ok {
 		// The edge holds these open for the life of the tunnel; keepalive is what
@@ -302,8 +331,8 @@ func (l *Lane) serveConn(ctx context.Context, conn net.Conn) {
 			// The reader only reads when it holds no whole object, so flushing
 			// in front of every read hands on everything decoded so far before
 			// the lane can block.
-			src = &flushReader{r: conn, ctx: ctx, flush: sess.Flush}
-			defer func() { _ = sess.Flush(ctx) }()
+			src = &flushReader{r: conn, ctx: hctx, flush: sess.Flush}
+			defer func() { _ = sess.Flush(hctx) }()
 		}
 	}
 	rd := objfmt.NewReader(src, l.Class)
@@ -320,7 +349,7 @@ func (l *Lane) serveConn(ctx context.Context, conn net.Conn) {
 
 	var onConn uint64
 	for {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil && !draining {
 			return
 		}
 		obj, err := rd.Next()
@@ -380,7 +409,7 @@ func (l *Lane) serveConn(ctx context.Context, conn net.Conn) {
 			obj = own.own(obj)
 		}
 
-		if err := handle(ctx, obj); err != nil {
+		if err := handle(hctx, obj); err != nil {
 			if errors.Is(err, ErrReject) {
 				l.counts.Rejected.Add(1)
 				l.Log.Warn("lane object refused", "lane", l.Name, "remote", remote,
