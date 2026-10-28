@@ -637,25 +637,32 @@ unprivileged ports by default. Give it
 
 **Lossless restarts.** Let systemd hold the lane sockets, so an edge that
 redials during a restart waits in the kernel's accept queue instead of being
-refused. One `.socket` unit per lane, named for the lane; the bridge adopts
-each by its `FileDescriptorName` and listens itself on any lane without one:
+refused. `FileDescriptorName=` names every socket of its unit, so use one
+`.socket` unit per lane, named for the lane; the bridge adopts each by that
+name and listens itself on any lane without one:
 
 ```ini
-# teranode-bridge.socket
+# teranode-bridge-tx.socket (and -subtree.socket, -block.socket alike,
+# with ports 9143 and 9144 and names subtree and block)
 [Socket]
 ListenStream=[2001:db8:3f::1]:8725
 FileDescriptorName=tx
-ListenStream=[2001:db8:3f::1]:9143
-FileDescriptorName=subtree
-ListenStream=[2001:db8:3f::1]:9144
-FileDescriptorName=block
+Service=teranode-bridge.service
 
 [Install]
 WantedBy=sockets.target
 ```
 
+and in `teranode-bridge.service`, under `[Unit]` and `[Service]`:
+
+```ini
+Requires=teranode-bridge-tx.socket teranode-bridge-subtree.socket teranode-bridge-block.socket
+After=teranode-bridge-tx.socket teranode-bridge-subtree.socket teranode-bridge-block.socket
+Sockets=teranode-bridge-tx.socket teranode-bridge-subtree.socket teranode-bridge-block.socket
+```
+
 Restart the service (`systemctl restart teranode-bridge.service`), never the
-socket. On `SIGTERM` the bridge drains each lane and flushes its pipeline
+sockets. On `SIGTERM` the bridge drains each lane and flushes its pipeline
 before it exits (`-drain-timeout`).
 
 ### Container
