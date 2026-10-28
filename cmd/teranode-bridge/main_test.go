@@ -473,3 +473,16 @@ func TestDistinctObjectsEachAnnounce(t *testing.T) {
 		})
 	}
 }
+
+// TestHandleTxWithoutCache pins the transaction-lane-only mode: with no tx
+// cache every EF transaction is fresh, including a re-delivery.
+func TestHandleTxWithoutCache(t *testing.T) {
+	for i := 0; i < 2; i++ {
+		if _, fresh, err := admitTx(efTx(), nil); err != nil || !fresh {
+			t.Fatalf("delivery %d: fresh=%v err=%v, want fresh", i, fresh, err)
+		}
+	}
+	if err := handleTx(context.Background(), efTx(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}

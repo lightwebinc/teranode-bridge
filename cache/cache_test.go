@@ -135,3 +135,22 @@ func TestGenerationalAdmitReportsDuplicates(t *testing.T) {
 		t.Fatalf("stats = %+v, want 2 duplicates, 1 stored, %d bytes", st, len("tx-bytes"))
 	}
 }
+
+// TestNilGenerationalIsDisabled pins the transaction-lane-only mode
+// (-tx-cache-bytes 0): a nil cache admits everything, holds nothing and
+// misses every lookup, without panicking anywhere it is passed.
+func TestNilGenerationalIsDisabled(t *testing.T) {
+	var g *Generational
+	k := Key{9}
+	if !g.Admit(k, []byte("tx")) || !g.Admit(k, []byte("tx")) {
+		t.Fatal("a disabled cache must admit every transaction")
+	}
+	g.PutOwned(k, "tx", []byte("tx"))
+	g.Put(k, "tx", []byte("tx"))
+	if _, _, ok := g.Get(k); ok || g.Has(k) {
+		t.Fatal("a disabled cache must hold nothing")
+	}
+	if st := g.Stats(); st != (Stats{}) {
+		t.Fatalf("stats = %+v, want zero", st)
+	}
+}

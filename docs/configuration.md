@@ -249,6 +249,7 @@ producer, local block assembly.
 | -------------- | -------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `-cache-bytes` | `1073741824` (1 GiB) | `1073741824` | Byte ceiling **per cache**. Two caches are created — objects (subtrees, blocks) and transactions — so the process ceiling is twice this value. |
 | `-cache-ttl`   | `10m`                | `10m` | How long a pushed object stays fetchable.                                                                                                      |
+| `-tx-cache-bytes` | `-1` (= `-cache-bytes`) | `-1` | Byte ceiling of the transaction cache, which serves subtree members to the cluster's pulls and is the tx lane's re-delivery check. `0` disables it for a bridge that carries the transaction lane only (subtrees and blocks reach the cluster another way): no transaction copies are kept, and a re-delivered transaction reaches propagation, which answers an already-known one with `200`. Admission is about a quarter of the bridge's CPU at 1.6M tx/s. |
 
 Size the TTL against validation lag, not against retention: this is a cache, not
 a store of record. An entry evicted before the cluster pulls it produces a `404`

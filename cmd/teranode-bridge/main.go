@@ -110,6 +110,7 @@ func main() {
 		mode       = flag.String("mode", "all", "all = full bridge; sink = receive, verify and count only (no cluster targets)")
 		cacheBytes = flag.Int64("cache-bytes", 1<<30, "object cache ceiling in bytes")
 		cacheTTL   = flag.Duration("cache-ttl", 10*time.Minute, "how long a pushed object stays fetchable")
+		txCache    = flag.Int64("tx-cache-bytes", -1, "transaction cache ceiling in bytes (-1 = -cache-bytes). The tx cache serves subtree members to the cluster's pulls and is the tx lane's re-delivery check. 0 disables it, for a bridge that carries the transaction lane only (subtrees and blocks reach the cluster another way): the bridge then keeps no transaction copies, and a re-delivered transaction reaches propagation, which answers an already-known one with 200")
 		maxObject  = flag.Int("max-object", 0, "per-object size ceiling (0 = codec default)")
 		statsEvery = flag.Duration("stats-every", time.Minute, "interval between stats lines (0 = off)")
 
@@ -205,7 +206,15 @@ func main() {
 	// The tx cache is generational, not LRU: at megatransaction-per-second
 	// rates the LRU bookkeeping costs ~5× the payload in heap and its pointer
 	// graph is what the GC scans. See cache.Generational.
-	txs := cache.NewGenerational(cache.Options{MaxBytes: *cacheBytes, TTL: *cacheTTL})
+	var txs *cache.Generational // nil: disabled (-tx-cache-bytes 0)
+	switch {
+	case *txCache < 0:
+		txs = cache.NewGenerational(cache.Options{MaxBytes: *cacheBytes, TTL: *cacheTTL})
+	case *txCache > 0:
+		txs = cache.NewGenerational(cache.Options{MaxBytes: *txCache, TTL: *cacheTTL})
+	default:
+		log.Info("tx cache disabled: transaction lane only, no subtree member serving, no re-delivery check")
+	}
 	seen := registry.New(30*time.Minute, 1<<20)
 	// What the cluster has actually been TOLD about. Deliberately NOT `seen`:
 	// `seen` records that a hash crossed the bridge (the reverse path's origin

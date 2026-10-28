@@ -21,6 +21,10 @@ import (
 // The semantics fit exactly what the tx cache is for: serving subtree_data
 // member lookups for subtrees completed in the last few seconds. It is a
 // recency window, not a store.
+//
+// A nil *Generational is a disabled cache: it holds nothing, admits
+// everything (so it de-duplicates nothing) and misses every lookup. A bridge
+// that carries the transaction lane only runs that way (-tx-cache-bytes 0).
 type Generational struct {
 	s [shards]*gshard
 }
@@ -79,6 +83,9 @@ func (s *gshard) rotateLocked(now time.Time) {
 
 // PutOwned stores body without copying; ownership transfers to the cache.
 func (g *Generational) PutOwned(key Key, _ string, body []byte) {
+	if g == nil {
+		return
+	}
 	g.Admit(key, body)
 }
 
@@ -91,6 +98,9 @@ func (g *Generational) PutOwned(key Key, _ string, body []byte) {
 // The caller must not mutate body afterwards either way: a duplicate held in
 // the current generation is replaced by it (the bytes are identical).
 func (g *Generational) Admit(key Key, body []byte) bool {
+	if g == nil {
+		return true
+	}
 	s := g.shardOf(key)
 	now := s.now()
 	s.mu.Lock()
@@ -120,11 +130,17 @@ func (g *Generational) Admit(key Key, body []byte) bool {
 
 // Put stores a copy of body (for callers whose slice aliases a reader buffer).
 func (g *Generational) Put(key Key, class string, body []byte) {
+	if g == nil {
+		return
+	}
 	g.PutOwned(key, class, append([]byte(nil), body...))
 }
 
 // Get returns the stored body. The class of every entry is "tx".
 func (g *Generational) Get(key Key) (body []byte, class string, ok bool) {
+	if g == nil {
+		return nil, "", false
+	}
 	s := g.shardOf(key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -142,6 +158,9 @@ func (g *Generational) Get(key Key) (body []byte, class string, ok bool) {
 
 // Has reports presence without counting a hit or miss.
 func (g *Generational) Has(key Key) bool {
+	if g == nil {
+		return false
+	}
 	s := g.shardOf(key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -156,6 +175,9 @@ func (g *Generational) Has(key Key) bool {
 // dropped by generation rotation.
 func (g *Generational) Stats() Stats {
 	var st Stats
+	if g == nil {
+		return st
+	}
 	for _, s := range g.s {
 		s.mu.Lock()
 		st.Entries += len(s.cur) + len(s.prev)
