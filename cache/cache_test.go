@@ -142,8 +142,10 @@ func TestGenerationalAdmitReportsDuplicates(t *testing.T) {
 func TestNilGenerationalIsDisabled(t *testing.T) {
 	var g *Generational
 	k := Key{9}
-	if !g.Admit(k, []byte("tx")) || !g.Admit(k, []byte("tx")) {
-		t.Fatal("a disabled cache must admit every transaction")
+	for i := 0; i < 2; i++ { // the second is a re-delivery
+		if !g.Admit(k, []byte("tx")) {
+			t.Fatalf("admission %d refused: a disabled cache admits every transaction", i)
+		}
 	}
 	g.PutOwned(k, "tx", []byte("tx"))
 	g.Put(k, "tx", []byte("tx"))
