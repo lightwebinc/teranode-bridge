@@ -1,7 +1,7 @@
 // Package lanes terminates the per-class object delivery lanes.
 //
 // Each lane is a dedicated TCP listener carrying exactly one object class. The
-// stream is bare — no length prefix, no type tag, no sync marker — so objects
+// stream is bare (no length prefix, no type tag, no sync marker), so objects
 // are delimited by walking their own structure, which objfmt.Reader does. That
 // also means a malformed object is unrecoverable for that connection: there is
 // no resync point, so the only correct response is to drop the connection and

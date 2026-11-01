@@ -29,12 +29,12 @@ go build ./cmd/teranode-bridge
 
 The Dockerfile produces a `gcr.io/distroless/static:nonroot` image with a single
 static binary at `/usr/local/bin/teranode-bridge`. No in-image `ENV` defaults are
-set — the bridge is configured entirely by flags, so pass them as the container
+set; the bridge is configured entirely by flags, so pass them as the container
 command or Helm `args`.
 
 ```bash
-docker build --build-arg VERSION=0.10.1 -t teranode-bridge:0.10.1 .
-docker run --rm teranode-bridge:0.10.1 -mode sink
+docker build --build-arg VERSION=0.12.0 -t teranode-bridge:0.12.0 .
+docker run --rm teranode-bridge:0.12.0 -mode sink
 ```
 
 Published images are gated behind a manual `image-publish` workflow run
@@ -43,24 +43,27 @@ Published images are gated behind a manual `image-publish` workflow run
 ## CI
 
 `make ci` runs the whole pipeline in containers via
-[Dagger](https://dagger.io) — `tidy` → `lint` → `vuln` → `unit` → `build` →
-`image` — so a local run and a GitHub Actions run execute the same steps. Each
+[Dagger](https://dagger.io) (`tidy` → `lint` → `vuln` → `unit` → `build` →
+`image`), so a local run and a GitHub Actions run execute the same steps. The
+pipeline is `github.com/lightwebinc/ci/gopipe`; `ci/main.go` is only its
+configuration. Each
 stage is also available on its own (`make ci-unit`, `make ci-lint`, …), and
 `make ci-shell` drops you into the builder container.
 
-CI resolves `shard-common` from a sibling checkout and applies a local replace,
-picking the branch matching the current one when it exists and `main` otherwise —
-so a shared-library change can be validated here before it is tagged. The image
+CI resolves `shard-common` from a sibling checkout (`-common`, default
+`../shard-common`) and applies a local replace, picking the branch matching the
+current one when it exists and `main` otherwise, so a shared-library change can
+be validated here before it is tagged. The image
 build deliberately does *not* use that replace: a published image always resolves
 `shard-common` from the module proxy at its committed version.
 
 ## Dependencies
 
-- [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common) — `objfmt`, the push object-frame codecs shared with the rest of the stack
-- [`github.com/twmb/franz-go`](https://github.com/twmb/franz-go) — Kafka producer
-- `google.golang.org/grpc`, `google.golang.org/protobuf` — blockchain notification stream
+- [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common): `objfmt`, the push object-frame codecs shared with the rest of the stack
+- [`github.com/twmb/franz-go`](https://github.com/twmb/franz-go): Kafka producer
+- `google.golang.org/grpc`, `google.golang.org/protobuf`: blockchain notification stream
 
 The bridge deliberately does **not** link Teranode's own module. The two contracts
-it needs — a three-field announcement message and a one-method notification
-stream — are reproduced from their wire definitions instead, so a small bridge does
+it needs (a three-field announcement message and a one-method notification
+stream) are reproduced from their wire definitions instead, so a small bridge does
 not pull in a full node's dependency tree.

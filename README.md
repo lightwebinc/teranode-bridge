@@ -13,7 +13,7 @@ A landing-tier bridge for **pushed delivery into an unmodified Teranode cluster*
 `teranode-bridge` terminates the per-class object delivery lanes on a machine in
 front of a Teranode cluster, hands each object class to the cluster service that
 owns it, and submits cluster-produced subtrees and blocks back onto the object
-plane — while the Teranode cluster itself stays **vanilla**.
+plane, while the Teranode cluster itself stays **vanilla**.
 
 ```
    object plane ══push══▶  teranode-bridge                Teranode LAN
@@ -27,7 +27,7 @@ plane — while the Teranode cluster itself stays **vanilla**.
 ## Why an announce shim
 
 Teranode learns about subtrees and blocks by *announcement plus pull*. The bridge
-already **has** the bytes — they were pushed to it — so it stores them, announces
+already **has** the bytes (they were pushed to it), so it stores them, announces
 itself as the source, and serves the resulting pull from the same LAN. That buys
 a fully pushed wide-area path with **no fork of Teranode**, and the cluster still
 fetches and validates exactly as it would from a peer.
@@ -40,13 +40,13 @@ Four planes (ingest, cache, retrieval, reverse) run in one process by default
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) — planes, lane framing, announce/pull contract, reverse path, byte order, block frame conversion, failure modes, package layout
-- [Configuration](docs/configuration.md) — every flag, defaults, required-flag matrix, deployment examples, reading the stats
-- [Metrics reference](docs/references/prometheusMetrics.md) — every metric, the endpoints, and the alert expressions
-- [Development](docs/development.md) — build, CI, container image, dependencies
-- [BRC-143 — Subtree Data](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-143-subtree-data.md)
-- [BRC-144 — Block Frame](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-144-block-frame.md)
-- [BRC-30 — Transaction Extended Format (EF)](https://github.com/bsv-blockchain/BRCs/blob/master/transactions/0030.md) — what the tx lane carries, preserved end to end so the validator gets its prevout data
+- [Architecture](docs/architecture.md): planes, lane framing, announce/pull contract, reverse path, byte order, block frame conversion, failure modes, package layout
+- [Configuration](docs/configuration.md): every flag, defaults, required-flag matrix, deployment examples, reading the stats
+- [Metrics reference](docs/references/prometheusMetrics.md): every metric, the endpoints, and the alert expressions
+- [Development](docs/development.md): build, CI, container image, dependencies
+- [BRC-143 Subtree Data](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-143-subtree-data.md)
+- [BRC-144 Block Frame](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-144-block-frame.md)
+- [BRC-30 Transaction Extended Format (EF)](https://github.com/bsv-blockchain/BRCs/blob/master/transactions/0030.md): what the tx lane carries, preserved end to end so the validator gets its prevout data
 
 ## Requirements
 
@@ -92,7 +92,7 @@ See [docs/configuration.md](docs/configuration.md) for the full flag reference.
 | `8725` | in | transaction lane (BRC-30 extended format only; standard-format transactions are refused) |
 | `9143` | in | subtree lane (BRC-143 push frames) |
 | `9144` | in | block lane (BRC-144 push frames) |
-| `9145` | in | retrieval plane — the cluster's pulls |
+| `9145` | in | retrieval plane: the cluster's pulls |
 | `9146` | in | `/metrics`, `/health*`, `/healthz`, `/readyz`, `/loglevel`, `/debug/pprof` |
 | `8726` | out | BRC-143 subtree submits to the edge proxy's object ingress (`-edge-subtree-port`) |
 | `8727` | out | BRC-144 block submits to the edge proxy's object ingress (`-edge-block-port`) |
@@ -116,7 +116,7 @@ non-zero means the object plane returned different bytes than were published.
 A Kubernetes Helm chart is published from a dedicated chart repository:
 
 - Repository: [`charts/teranode-bridge`](https://github.com/lightwebinc/charts/tree/main/charts/teranode-bridge)
-- OCI: `helm install bridge oci://ghcr.io/lightwebinc/charts/teranode-bridge`
+- OCI: `helm install bridge oci://ghcr.io/lightwebinc/charts/teranode-bridge --version 0.9.0`
 
 `config.peerId` is required, and `config.advertise`, `config.propagation` and
 `config.kafka` unless `config.mode=sink`. See the chart README for scaling rules.
@@ -135,7 +135,7 @@ A Kubernetes Helm chart is published from a dedicated chart repository:
 ├── encode/                  # BRC-143 / BRC-144 push-frame builders
 ├── tnwire/                  # BRC-144 ⇄ Teranode block serialization
 ├── hashid/                  # internal ⇄ display byte order, in one place
-├── internal/                # submit, txpipe, tnasset, health, obs, metrics, tracing
+├── internal/                # activation, submit, txpipe, tnasset, health, obs, metrics, tracing
 ├── proto/blockchain_api/    # minimal wire-compatible Subscribe subset
 ├── ci/                      # Dagger CI driver
 ├── deploy/grafana/          # dashboard JSON

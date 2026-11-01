@@ -2,18 +2,19 @@
 // fabric.
 //
 // The cluster tells us what it accepted through the blockchain service's
-// notification stream. That stream does not say where an object came from — the
+// notification stream. That stream does not say where an object came from (the
 // node's own p2p announces every notification to its gossip peers for exactly
-// the same reason — so the origin filter is ours: anything the bridge previously
+// the same reason), so the origin filter is ours: anything the bridge previously
 // delivered *into* the cluster is registered, and a notification for a
 // registered hash is remote in origin and must not be pushed back up. What
 // remains is what this cluster produced.
 //
 // One consequence is worth stating plainly: content this node learned over
 // libp2p while the tunnel was down looks unseen and will be pushed up after
-// recovery. That duplicate is bounded by the outage and harmless — every
-// receiver dedups by hash — and the clean fix is an origin marker on the
-// notification, which is an upstream ask.
+// recovery. That duplicate is bounded by the outage and harmless (every
+// receiver dedups by hash); the clean fix would be an origin marker on the
+// notification, which Teranode does not provide (docs/architecture.md, Known
+// upstream limitations).
 package reverse
 
 import (
@@ -85,7 +86,7 @@ type Config struct {
 	//
 	// This exists because the origin filter is only as good as our view of the
 	// object plane. A freshly started bridge has an EMPTY registry, so every
-	// notification looks unseen — which reads as "locally produced" — and the
+	// notification looks unseen, which reads as "locally produced", and the
 	// cluster re-emits notifications for objects it already holds. The mine tag
 	// covers blocks, but subtrees have no marker of their own beyond the block
 	// that names them, so publishing while blind means republishing other
@@ -99,14 +100,14 @@ type Config struct {
 	// it are treated as REMOTE in origin and skipped, closing the race the
 	// seen-registry cannot: a block this cluster learned over libp2p before
 	// the fabric delivered it looks unseen and would otherwise be republished
-	// upward with false attribution. The check is stateless — derived from
-	// block content — so it also survives bridge restarts, which wipe the
+	// upward with false attribution. The check is stateless (derived from
+	// block content), so it also survives bridge restarts, which wipe the
 	// registry. Subtrees carry no coinbase and need no equivalent: their
 	// notification has exactly one producer, local block assembly.
 	MineTag []byte
 
 	// GRPCMetrics, when set, instruments the blockchain connection with the
-	// standard gRPC client metrics — the same provider Teranode uses.
+	// standard gRPC client metrics, the same provider Teranode uses.
 	GRPCMetrics *grpcprom.ClientMetrics
 
 	// ClusterPoll is how often to read the cluster's FSM state and tip height
@@ -152,8 +153,8 @@ type Subscriber struct {
 }
 
 // SetActive flips whether this subscriber holds the submitter role. A standby
-// keeps its subscription, registry and origin filter warm — promotion is a
-// flag flip, not a cold start — but publishes nothing while inactive.
+// keeps its subscription, registry and origin filter warm (promotion is a
+// flag flip, not a cold start) but publishes nothing while inactive.
 func (s *Subscriber) SetActive(v bool) { s.active.Store(v) }
 
 // Active reports whether this subscriber currently publishes.
@@ -184,7 +185,7 @@ func New(cfg Config, seen *registry.Registry, build Builder, log *slog.Logger) (
 		grpc.WithTransportCredentials(creds),
 		// Without this the client NEVER pings (grpc-go's default is infinity),
 		// and a silently dropped path leaves the Subscribe stream's Recv
-		// blocked forever — the reconnect loop below is only entered on a Recv
+		// blocked forever; the reconnect loop below is only entered on a Recv
 		// error. See keepaliveParams.
 		grpc.WithKeepaliveParams(ka),
 		// Teranode gives every gRPC client an OTel stats handler and a
@@ -248,7 +249,7 @@ func (s *Subscriber) Run(ctx context.Context) error {
 			}
 			// Stamped for EVERY notification type, not just the two we act on.
 			// The cluster sends PINGs, so this gauge keeps ticking on an idle
-			// chain — which is what makes "the subscription is dead" separable
+			// chain, which is what makes "the subscription is dead" separable
 			// from "the chain is quiet". Acting only on subtree and block
 			// notifications would have made a silent stream look like calm.
 			obs.Stamp(obs.LastNotificationTime)
@@ -296,7 +297,7 @@ func (s *Subscriber) publish(ctx context.Context, class string, hash hashid.Hash
 		return
 	}
 	if !s.active.Load() {
-		// Standby: the role lives elsewhere. Held, not lost — if this bridge
+		// Standby: the role lives elsewhere. Held, not lost: if this bridge
 		// is promoted the cluster's own p2p re-announces recent content, and
 		// anything still flowing arrives as fresh notifications.
 		s.standbyHeld.Add(1)
@@ -322,7 +323,7 @@ func (s *Subscriber) publish(ctx context.Context, class string, hash hashid.Hash
 	}
 
 	// Origin gate: a block whose coinbase does not carry this cluster's tag
-	// was mined elsewhere — the cluster learned of it (libp2p, catchup) and
+	// was mined elsewhere: the cluster learned of it (libp2p, catchup) and
 	// notified us, but it is not ours to publish. Without this, gossip winning
 	// the race against the fabric turns into a republish with false
 	// attribution at every receiving cluster.
@@ -367,7 +368,7 @@ type Stats struct {
 	SubtreesUp, BlocksUp, RemoteSkipped, Skipped, Failures, Reconnects uint64
 	Gated                                                              uint64
 	// ForeignSkipped counts block notifications whose coinbase carried another
-	// cluster's tag — gossip-learned blocks correctly not republished.
+	// cluster's tag, gossip-learned blocks correctly not republished.
 	ForeignSkipped uint64
 	// StandbyHeld counts publishes withheld because this bridge does not hold
 	// the submitter role.

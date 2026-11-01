@@ -3,13 +3,13 @@
 //
 // This is a cache, not a store of record: the store of record is the cluster's
 // own, after validation. The working set is therefore delivery-rate × validation
-// lag — seconds of traffic — so entries are held by hash with a TTL and a byte
+// lag (seconds of traffic), so entries are held by hash with a TTL and a byte
 // ceiling, and eviction is a normal event rather than data loss (a missed pull
 // falls back to the cluster's ordinary peer-pull path).
 //
 // The cache is sharded 64 ways by the first key byte. Keys are content hashes,
 // so the spread is uniform and no shard's mutex sees more than ~1/64th of the
-// put/get rate — a single global lock convulses long before the megaobject-per-
+// put/get rate; a single global lock convulses long before the megaobject-per-
 // second rates the tx lane is sized for.
 package cache
 

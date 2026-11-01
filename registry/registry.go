@@ -8,8 +8,8 @@
 //
 //   - Up (reverse path): decide whether a subtree/block the cluster just
 //     accepted actually originated here. Teranode's blockchain notifications
-//     carry no local-vs-remote marker — its own p2p announces every one of them
-//     — so "did we deliver this to the cluster?" is the origin filter. Anything
+//     carry no local-vs-remote marker (its own p2p announces every one of them),
+//     so "did we deliver this to the cluster?" is the origin filter. Anything
 //     registered as delivered is remote in origin and must not be pushed back
 //     up; anything unseen is ours to publish.
 //
@@ -19,11 +19,11 @@
 //
 // Sharded 64 ways by the first key byte (keys are content hashes, so the
 // spread is uniform), and aged GENERATIONALLY: each shard keeps a current and
-// a previous map, and rotation — every ttl/2, or when the current map reaches
-// half the shard's capacity — drops the previous map wholesale and demotes the
-// current one. Expiry is therefore O(1) amortized per operation. The earlier
-// design swept the whole map on every insert once at capacity; profiled under
-// a saturated tx lane that sweep was 93% of the process's CPU. The trade is
+// a previous map, and rotation (every ttl/2, or when the current map reaches
+// half the shard's capacity) drops the previous map wholesale and demotes the
+// current one. Expiry is therefore O(1) amortized per operation; a whole-map
+// sweep on every insert at capacity would be most of the process's CPU under a
+// saturated tx lane. The trade is
 // TTL precision: an entry now lives between ttl/2 and ttl (or less under
 // capacity pressure), which is exactly as good for duplicate suppression.
 package registry

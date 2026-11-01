@@ -1,5 +1,5 @@
 // Package retrieval serves the pulls a Teranode cluster makes after the bridge
-// announces an object — the half of the announce shim that makes a pushed object
+// announces an object: the half of the announce shim that makes a pushed object
 // look, to the cluster, exactly like one fetched from a peer's Asset service.
 //
 // It implements the subset of that API which subtreevalidation and

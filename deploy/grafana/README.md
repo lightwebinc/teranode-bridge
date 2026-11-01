@@ -1,20 +1,20 @@
 # Grafana
 
-`teranode-bridge-dashboard.json` — import into Grafana (uid `teranode-bridge`),
+`teranode-bridge-dashboard.json`: import into Grafana (uid `teranode-bridge`),
 or drop it into a provisioning directory alongside Teranode's own dashboards.
 
-It expects a Prometheus data source with **uid `prometheus`** — the
+It expects a Prometheus data source with **uid `prometheus`**, the
 kube-prometheus-stack default, and the convention every dashboard in this fleet
 uses. On import Grafana will let you remap it if yours differs.
 
 ## Requirements
 
-- **teranode-bridge >= 0.6.0.** That release renamed the series from `btb_*` to
-  `teranode_bridge_*`; the dashboard queries only the new names, so against a
-  0.5.x bridge every panel reads "No data" while the target is perfectly up.
+- The dashboard queries the `teranode_bridge_*` names only, never the legacy
+  `btb_*` aliases, so against a bridge exporting only those every panel reads
+  "No data" while the target is perfectly up.
 - A **`cluster` label** on the bridge targets. The "Submitters active" tile sums
   `teranode_bridge_submitter_active` **by cluster**, an invariant that must equal
-  exactly 1 per cluster per class — without the label every bridge collapses into
+  exactly 1 per cluster per class; without the label every bridge collapses into
   one bucket and a healthy fleet reads as a double-submitter. The Helm chart's
   ServiceMonitor does not add one; use `metrics.serviceMonitor.relabelings`, or
   stamp it in a static scrape config.
@@ -22,8 +22,7 @@ uses. On import Grafana will let you remap it if yours differs.
 The `cluster` and `instance` pickers are sourced from
 `up{job=~"teranode-bridge.*"}`, not from a bridge metric. `up` exists for a
 scraped target whatever the process inside is exporting, so the pickers populate
-across the metric rename and while a target is **down** — which is exactly when
-someone opens this dashboard.
+while a target is **down**, which is exactly when someone opens this dashboard.
 
 ## Layout
 

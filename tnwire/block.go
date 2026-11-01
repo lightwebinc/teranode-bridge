@@ -9,8 +9,8 @@
 //
 // Both directions live in one file on purpose. The bridge decodes this format
 // when it serves a pushed block to the cluster and encodes it when it publishes
-// a cluster-produced block, and a round trip through the pair must be lossless
-// — which the tests assert.
+// a cluster-produced block, and a round trip through the pair must be lossless,
+// which the tests assert.
 //
 //	BRC-144:  header[80] | txCount u64BE | size u64BE | subtreeCount u64BE |
 //	          roots[32×M] | coinbase | height u64BE | bumpLen u64BE | bump

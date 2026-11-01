@@ -1,13 +1,13 @@
 // Package hashid handles the one byte-order trap that runs through this whole
 // bridge.
 //
-// Bitcoin hashes exist in two orders. On the wire — inside frames, subtree node
-// lists, block headers — they are "internal" order. Everywhere a human or an API
+// Bitcoin hashes exist in two orders. On the wire (inside frames, subtree node
+// lists, block headers) they are "internal" order. Everywhere a human or an API
 // sees them (RPC output, URL path segments, the hash field of a Kafka
 // announcement) they are the byte-REVERSED "display" order. Teranode parses
 // announced and requested hashes with chainhash.NewHashFromStr, which reverses;
-// so a hash taken straight off the wire and hex-encoded would be silently wrong
-// — the announcement would name an object nobody can find.
+// so a hash taken straight off the wire and hex-encoded would be silently wrong:
+// the announcement would name an object nobody can find.
 //
 // Every conversion between the two orders goes through this package.
 package hashid

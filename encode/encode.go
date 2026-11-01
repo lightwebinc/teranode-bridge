@@ -6,7 +6,7 @@
 // on the wire.
 //
 // Every frame is self-verified against the shared codec before it is returned.
-// The lanes carry bare objects — no length prefix, no sync marker — so a frame
+// The lanes carry bare objects (no length prefix, no sync marker), so a frame
 // that sizes wrong would not merely be rejected, it would desynchronise the
 // stream and cost every object behind it.
 package encode

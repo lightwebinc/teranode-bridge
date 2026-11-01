@@ -1,7 +1,7 @@
 # teranode-bridge Prometheus Metrics Reference
 
 Every series is `teranode_bridge_*`, produced by the `Namespace: "teranode"` /
-`Subsystem: "bridge"` pair that names every Teranode metric — so a bridge lands
+`Subsystem: "bridge"` pair that names every Teranode metric, so a bridge lands
 on the same grid as the cluster it fronts and is reachable from the same
 dashboards, recording rules and relabel configs. The format of this document
 mirrors [Teranode's own metrics reference](https://github.com/bsv-blockchain/teranode/blob/main/docs/references/prometheusMetrics.md).
@@ -12,12 +12,11 @@ thing and the two can share a panel.
 
 ## Legacy prefix
 
-Before this release the bridge used a `btb_` prefix of its own. Every series
-that existed under that name is **dual-emitted** while `-metrics-legacy-prefix`
-is true (the default) so existing dashboards survive the cutover. Metrics
-introduced with the new naming are never aliased. Set
-`-metrics-legacy-prefix=false` once dashboards are migrated; the alias is
-scheduled for removal in the release after next.
+`btb_` is the bridge's earlier prefix for the same series. Every series that
+has a `btb_` name is **dual-emitted** under both prefixes while
+`-metrics-legacy-prefix` is true (the default), so dashboards keyed on the old
+names keep working. Metrics introduced with the `teranode_bridge_` naming are
+never aliased. Set `-metrics-legacy-prefix=false` once dashboards are migrated.
 
 ## Metric types
 
@@ -34,9 +33,9 @@ scheduled for removal in the release after next.
 | `GET /metrics` | Prometheus exposition |
 | `GET /health` | Dependency report, same body shape as Teranode |
 | `GET /health/readiness` | As `/health`; probes dependencies |
-| `GET /health/liveness` | Process liveness only — dependencies are **not** probed |
+| `GET /health/liveness` | Process liveness only: dependencies are **not** probed |
 | `GET /healthz` | Bare liveness, plain text |
-| `GET /readyz` | Narrow readiness: every delivery lane is bound. **The failover contract** — a standby polls the primary's `/readyz` |
+| `GET /readyz` | Narrow readiness: every delivery lane is bound. **The failover contract**: a standby polls the primary's `/readyz` |
 | `POST /loglevel` | Runtime log-level change, no restart |
 | `/debug/pprof/…` | `index`, `cmdline`, `profile`, `symbol`, `trace`, plus the named runtime profiles |
 
@@ -55,12 +54,12 @@ deadline, as Teranode's do.
 | Metric Name | Type | Description |
 |-------------|------|-------------|
 | `teranode_bridge_lane_connections_total` | Counter | Connections accepted, by `lane`. |
-| `teranode_bridge_lane_connections_active` | Gauge | Connections open right now, by `lane`. Zero on a lane that should be fed is a whole-edge outage — a condition no counter can show. |
+| `teranode_bridge_lane_connections_active` | Gauge | Connections open right now, by `lane`. Zero on a lane that should be fed is a whole-edge outage, a condition no counter can show. |
 | `teranode_bridge_lane_objects_total` | Counter | Whole objects read, by `lane`. |
 | `teranode_bridge_lane_bytes_total` | Counter | Object bytes read, by `lane`. |
 | `teranode_bridge_lane_handler_errors_total` | Counter | Objects whose handler failed, by `lane`. The object is lost; the connection is kept. |
 | `teranode_bridge_lane_connections_dropped_total` | Counter | Connections dropped on a framing fault, by `lane`. |
-| `teranode_bridge_lane_objects_rejected_total` | Counter | Well-framed objects refused on lane format policy, by `lane` — on `tx`, a transaction that is not BRC-30 extended format. A sender bug, not a cluster fault. |
+| `teranode_bridge_lane_objects_rejected_total` | Counter | Well-framed objects refused on lane format policy, by `lane`: on `tx`, a transaction that is not BRC-30 extended format. A sender bug, not a cluster fault. |
 | `teranode_bridge_object_bytes` | Histogram | Object size distribution, by `lane`. Buckets: `MetricsBucketsSize`. On for `subtree` and `block`; on `tx` only with `-tx-size-histogram`. |
 
 ## Cache
@@ -74,8 +73,8 @@ deadline, as Teranode's do.
 | `teranode_bridge_cache_misses_total` | Counter | Lookups for an object not held, by `kind`. |
 | `teranode_bridge_cache_evicted_total` | Counter | Objects evicted by the byte ceiling, by `kind`. Expected under load; a problem only when paired with retrieval misses. |
 | `teranode_bridge_cache_expired_total` | Counter | Objects dropped on TTL expiry at lookup, by `kind`. |
-| `teranode_bridge_registry_entries` | Gauge | Hashes in the **seen**-registry (delivery dedup, origin filter, echo detection). Unchanged in meaning: the separate `announced` registry that gates announcements is not exposed as a series — its size is in the `registry stats` log line. |
-| `teranode_bridge_registry_duplicates_total` | Counter | Objects recognised as already seen. |
+| `teranode_bridge_registry_entries` | Gauge | Hashes in the **seen**-registry (delivery dedup, origin filter, echo detection). The separate `announced` registry that gates announcements is not exposed as a series; its size is in the `registry stats` log line. |
+| `teranode_bridge_registry_duplicates_total` | Counter | Objects recognized as already seen. |
 
 ## Transaction pipeline
 
@@ -86,7 +85,7 @@ deadline, as Teranode's do.
 | `teranode_bridge_txpipe_enqueued_total` | Counter | Transactions accepted into the pipe. |
 | `teranode_bridge_txpipe_batches_total` | Counter | Batch submissions shipped. |
 | `teranode_bridge_txpipe_batch_seals_total` | Counter | Why batches sealed, by `reason` (`size`, `bytes`, `linger`, `dependency`). |
-| `teranode_bridge_txpipe_retried_total` | Counter | Transactions re-submitted after a partial (`500`) or whole-batch failure — as one further batch under the inflight semaphore, never one request per transaction. |
+| `teranode_bridge_txpipe_retried_total` | Counter | Transactions re-submitted after a partial or whole-batch failure, as one further batch under the inflight semaphore, never one request per transaction. |
 | `teranode_bridge_txpipe_retry_accepted_total` | Counter | Retried transactions the cluster then accepted. |
 | `teranode_bridge_txpipe_unattributed_total` | Counter | Error lines naming no batch member. Those transactions' outcome is **unknown** and excluded from `accepted`. |
 | `teranode_bridge_txpipe_rate_limited_total` | Counter | Batches refused by an endpoint's HTTP limiter (429). |
@@ -97,9 +96,9 @@ deadline, as Teranode's do.
 | Metric Name | Type | Description |
 |-------------|------|-------------|
 | `teranode_bridge_announce_total` | Counter | Announcements produced, by `class` (`subtree`, `block`). |
-| `teranode_bridge_announce_failures_total` | Counter | Announcements that failed to produce. The object stays cached and servable, and is **not** recorded as announced — so the next redelivery of it announces again. A failure the fabric never redelivers is still an object the cluster is not told about. |
+| `teranode_bridge_announce_failures_total` | Counter | Announcements that failed to produce. The object stays cached and servable, and is **not** recorded as announced, so the next redelivery of it announces again. A failure the fabric never redelivers is still an object the cluster is not told about. |
 | `teranode_bridge_announce_duration_seconds` | Histogram | Produce-to-ack latency, by `class`. Buckets: `MetricsBucketsMilliSeconds`. |
-| `teranode_bridge_announce_to_first_pull_seconds` | Histogram | **The bridge's own SLI**: from announcement ack to the cluster's first pull of that object, by `class`. Buckets: `MetricsBucketsSeconds`. Nothing on either side of the bridge measures this — the cluster does not know when it was told, the fabric does not know when the cluster acted. A rising p99 means the cache TTL will start evicting objects before they are fetched. |
+| `teranode_bridge_announce_to_first_pull_seconds` | Histogram | **The bridge's own SLI**: from announcement ack to the cluster's first pull of that object, by `class`. Buckets: `MetricsBucketsSeconds`. Nothing on either side of the bridge measures this: the cluster does not know when it was told, the fabric does not know when the cluster acted. A rising p99 means the cache TTL will start evicting objects before they are fetched. |
 | `teranode_bridge_announce_awaiting_pull` | Gauge | Announcements acked but not yet pulled. A level that keeps climbing means announcements land and pulls do not follow. |
 | `teranode_bridge_kafka_producer_buffered_records` | Gauge | Records the Kafka client still holds unproduced. A sustained non-zero level is an announce **backlog**, which no failure counter reports. |
 
@@ -127,10 +126,10 @@ cluster stay distinguishable on one dashboard.
 | Metric Name | Type | Description |
 |-------------|------|-------------|
 | `teranode_bridge_retrieval_served_total` | Counter | Pulls served from cache, by `route` (`subtree`, `subtree_data`, `txs`, `block`). |
-| `teranode_bridge_retrieval_duration_seconds` | Histogram | Time to serve one pull, by `route`. Buckets: `MetricsBucketsMilliSeconds`. This sits on the cluster's block-validation critical path — a slow pull here is indistinguishable, cluster-side, from a slow peer. |
+| `teranode_bridge_retrieval_duration_seconds` | Histogram | Time to serve one pull, by `route` (the served routes plus `unserved`). Buckets: `MetricsBucketsMilliSeconds`. This sits on the cluster's block-validation critical path: a slow pull here is indistinguishable, cluster-side, from a slow peer. |
 | `teranode_bridge_retrieval_misses_total` | Counter | Pulls answered 404. The cluster falls back to its ordinary peer-pull path. |
 | `teranode_bridge_retrieval_errors_total` | Counter | Pulls answered 5xx on a genuine bridge-side fault. |
-| `teranode_bridge_retrieval_unserved_route_total` | Counter | Requests for unserved routes, by `class`. `chain_sync` is the **catchup-divert canary** — see the alerting section. |
+| `teranode_bridge_retrieval_unserved_route_total` | Counter | Requests for unserved routes, by `class` (`chain_sync`, `other`). `chain_sync` is the **catchup-divert canary**; see the alerting section. |
 
 ## Reverse path (cluster → object plane)
 
@@ -139,7 +138,7 @@ cluster stay distinguishable on one dashboard.
 | `teranode_bridge_reverse_published_total` | Counter | Cluster-produced objects published upward, by `class`. |
 | `teranode_bridge_reverse_skipped_total` | Counter | Notifications not published, by `reason` (`remote_origin`, `unavailable`, `foreign_origin`, `not_ready`, `standby`). |
 | `teranode_bridge_reverse_failures_total` | Counter | Asset fetch, frame encode or upward submit failures. |
-| `teranode_bridge_reverse_reconnects_total` | Counter | Notification-stream reconnects. Routine — the cluster rolls its gRPC connections — and also how a keepalive-detected dead path surfaces. A step change with no cluster restart points at the network path, not the cluster. |
+| `teranode_bridge_reverse_reconnects_total` | Counter | Notification-stream reconnects. Routine (the cluster rolls its gRPC connections), and also how a keepalive-detected dead path surfaces. A step change with no cluster restart points at the network path, not the cluster. |
 | `teranode_bridge_submitter_active` | Gauge | 1 while this bridge holds the submitter role, 0 on a standby. **Must sum to exactly 1 per cluster per class.** |
 | `teranode_bridge_asset_fetch_duration_seconds` | Histogram | Time to build an object from the cluster's asset service, by `class`. Buckets: `MetricsBucketsMilliLongSeconds`. |
 | `teranode_bridge_uptunnel_objects_total` | Counter | Objects written to the object-plane ingress, by `class`. |
@@ -168,9 +167,9 @@ Every counter in the bridge is monotonic, so a stalled lane, a dead subscription
 and a quiet network all render as the same flat line. These are unix timestamps,
 alertable as `time() - metric > N` without knowing the traffic baseline.
 
-They are **seeded with the process start time** at startup. Presence matters —
-an absent series matches no alert expression, which is exactly the silent failure
-these exist to catch — but so does the seed value: `time() - 0` is fifty-odd
+They are **seeded with the process start time** at startup. Presence matters
+(an absent series matches no alert expression, which is exactly the silent failure
+these exist to catch), but so does the seed value: `time() - 0` is fifty-odd
 years, so seeding with zero would fire every staleness alert the instant the
 process started. Seeded with the start time, the value is always an age, and a
 bridge that never receives anything trips its alert exactly N seconds after boot.
@@ -181,7 +180,7 @@ bridge that never receives anything trips its alert exactly N seconds after boot
 | `teranode_bridge_last_announce_timestamp_seconds` | Gauge | Last successful announcement, by `class`. |
 | `teranode_bridge_last_pull_timestamp_seconds` | Gauge | Last cluster pull served. |
 | `teranode_bridge_last_submit_timestamp_seconds` | Gauge | Last accepted batch submission. |
-| `teranode_bridge_last_notification_timestamp_seconds` | Gauge | Last blockchain notification received. Stamped for **every** notification type including PINGs, so a live subscription on an idle chain still ticks — which is what makes "the subscription is dead" separable from "the chain is quiet". |
+| `teranode_bridge_last_notification_timestamp_seconds` | Gauge | Last blockchain notification received. Stamped for **every** notification type including PINGs, so a live subscription on an idle chain still ticks, which is what makes "the subscription is dead" separable from "the chain is quiet". |
 
 ## Data integrity
 
@@ -200,7 +199,7 @@ connection.
 
 `deploy/grafana/teranode-bridge-dashboard.json` imports as uid `teranode-bridge`
 and templates `$job`/`$instance` off `teranode_bridge_build_info`. Scope it to
-one cluster's bridges — the submitter tile sums an invariant that is per-cluster.
+one cluster's bridges: the submitter tile sums an invariant that is per-cluster.
 
 ## Alerting
 
@@ -214,7 +213,7 @@ chart (`monitoring.prometheusRule.enabled`).
 | `BridgeNoSubmitter` | `sum by (cluster) (teranode_bridge_submitter_active) == 0` | Nothing is publishing cluster output upward. |
 | `BridgeDoubleSubmitter` | `sum by (cluster) (teranode_bridge_submitter_active) > 1` | Two bridges publishing. Dedup absorbs it, but it means the failover logic is confused. |
 | `BridgeLaneStalled` | `time() - teranode_bridge_last_object_timestamp_seconds > 900` | No delivery on a lane. Catches whole-edge death, which the counters cannot. |
-| `BridgeSubscriptionDead` | `time() - teranode_bridge_last_notification_timestamp_seconds > 300` | The blockchain notification stream is silent, PINGs included. Client keepalive should now turn a dead path into a reconnect within ~50s, so this firing means something keepalive cannot fix — the cluster stopped sending, or the connection is up but the stream is not. |
+| `BridgeSubscriptionDead` | `time() - teranode_bridge_last_notification_timestamp_seconds > 300` | The blockchain notification stream is silent, PINGs included. Client keepalive turns a dead path into a reconnect within about 50 s, so this firing means something keepalive cannot fix: the cluster stopped sending, or the connection is up but the stream is not. |
 | `BridgeAnnounceBacklog` | `teranode_bridge_kafka_producer_buffered_records > 0` for 5m | Announcements are queuing, not failing. |
 | `BridgeAwaitingPullClimbing` | `teranode_bridge_announce_awaiting_pull > 100` for 15m | The cluster is not acting on announcements. |
 | `BridgeUnattributedSubmits` | `rate(teranode_bridge_txpipe_unattributed_total[15m]) > 0` | Delivery counts are incomplete, not merely bad. |
@@ -229,7 +228,7 @@ cluster trace stays sampled across the bridge. Instrumented boundaries:
 
 - outbound HTTP to propagation and to the asset service (`otelhttp`)
 - outbound gRPC to blockchain (`otelgrpc`)
-- inbound HTTP on the retrieval plane (`otelhttp`) — this is what keeps "why was
+- inbound HTTP on the retrieval plane (`otelhttp`): this is what keeps "why was
   this block slow to validate" from dead-ending at the bridge
 
 **Known gap, shared with upstream:** announcements ride Kafka, and Teranode does
