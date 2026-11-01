@@ -131,7 +131,7 @@ func main() {
 		txRetries    = flag.Int("tx-retries", 6, "per-tx retries for failures that resolve with time (missing parent, THRESHOLD_EXCEEDED), on a 25ms..3.2s ladder (6 = ~8.5s); 0 = off")
 
 		metricsAddr    = flag.String("metrics-addr", "[::]:9146", "HTTP listener for /metrics, /health*, /healthz, /readyz, /loglevel, /debug/pprof (empty = off)")
-		legacyPrefix   = flag.Bool("metrics-legacy-prefix", true, "also emit every pre-existing series under the old btb_ name alongside teranode_bridge_, so dashboards built on the btb_ names keep working. Set false once every consumer queries teranode_bridge_ only")
+		legacyPrefix   = flag.Bool("metrics-legacy-prefix", false, "also emit every pre-existing series under the old btb_ name alongside teranode_bridge_, for a dashboard still on the btb_ names")
 		healthStrict   = flag.Bool("health-strict", false, "fail /health/readiness when ANY dependency is down, which is Teranode's all-or-nothing CheckAll behaviour. Off by default: the retrieval plane serves from a local cache, so a bridge with unreachable Kafka can still answer every pull for what it has already announced, and failing readiness would strand exactly those fetches")
 		txSizeHist     = flag.Bool("tx-size-histogram", false, "observe a per-object size histogram on the TX lane. Off by default: the lane bytes counter already gives the mean, and at megatransaction-per-second rates a bucketed observation per object is real work on the read path")
 		clusterPoll    = flag.Duration("cluster-poll", 15*time.Second, "how often to read the cluster's FSM state and tip height over the blockchain connection (0 = off; requires -blockchain)")

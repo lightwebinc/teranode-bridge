@@ -55,7 +55,7 @@ func TestGatherWithSourcesAttached(t *testing.T) {
 		}
 	}
 
-	// The legacy alias must still be present while the dual-emit release is
+	// The legacy alias must be present while the flag is on
 	// current: that promise is the only reason existing dashboards survive the
 	// rename, so it is worth a test rather than a comment.
 	for _, want := range []string{

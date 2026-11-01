@@ -9,9 +9,8 @@ uses. On import Grafana will let you remap it if yours differs.
 
 ## Requirements
 
-- The dashboard queries the `teranode_bridge_*` names only, never the legacy
-  `btb_*` aliases, so against a bridge exporting only those every panel reads
-  "No data" while the target is perfectly up.
+- The dashboard queries the `teranode_bridge_*` names only, so against a bridge
+  older than v0.6.0 every panel reads "No data" while the target is up.
 - A **`cluster` label** on the bridge targets. The "Submitters active" tile sums
   `teranode_bridge_submitter_active` **by cluster**, an invariant that must equal
   exactly 1 per cluster per class; without the label every bridge collapses into

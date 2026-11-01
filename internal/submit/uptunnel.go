@@ -1,3 +1,5 @@
+// Package submit carries objects from this cluster upward: subtrees and blocks
+// the cluster produced, back through the tunnel to the edge.
 package submit
 
 import (

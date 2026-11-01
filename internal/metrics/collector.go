@@ -18,10 +18,10 @@ import (
 // Teranode grid, so a dashboard, recording rule or metric_relabel keyed on
 // `teranode_` skipped the bridge entirely.
 //
-// The legacy prefix is dual-emitted for one release so existing multicast-fleet
-// dashboards keep working during the cutover. Only series that EXISTED under
-// `btb_` get an alias: a metric introduced with the new naming has no dashboard
-// to keep working and is emitted once.
+// The legacy prefix is off by default; -metrics-legacy-prefix restores it for a
+// dashboard still on the old names. Only series that EXISTED under `btb_` get an
+// alias: a metric introduced with the new naming has no dashboard to keep working
+// and is emitted once.
 const (
 	modernPrefix = "teranode_bridge_"
 	legacyPrefix = "btb_"

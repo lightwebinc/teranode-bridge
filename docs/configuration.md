@@ -367,7 +367,7 @@ series; it is off the Teranode grid, so a dashboard or recording rule keyed on
 
 | Flag | Default | Value | Description |
 | --- | --- | --- | --- |
-| `-metrics-legacy-prefix` | `true` | `false` | Also emit every series that has a `btb_` name under that prefix. Set `false` once dashboards are migrated. |
+| `-metrics-legacy-prefix` | `false` | `true` | Also emit every series that has a `btb_` name under that prefix, for a dashboard still on the old names. |
 
 Metrics introduced with the new naming are **not** aliased.
 

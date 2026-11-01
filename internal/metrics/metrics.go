@@ -88,9 +88,8 @@ type Options struct {
 	// Version and Instance identify the build and the process.
 	Version, Instance string
 	// LegacyPrefix dual-emits every pre-existing series under the old `btb_`
-	// name as well as `teranode_bridge_`, so dashboards written against the old
-	// names survive the cutover. Series introduced with the new naming are
-	// never aliased.
+	// name as well as `teranode_bridge_`, for a dashboard still on the old names.
+	// Series introduced with the new naming are never aliased.
 	LegacyPrefix bool
 	// Strict makes every health dependency gate readiness, which is Teranode's
 	// all-or-nothing CheckAll behaviour. Off by default; see internal/health

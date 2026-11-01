@@ -12,11 +12,10 @@ thing and the two can share a panel.
 
 ## Legacy prefix
 
-`btb_` is the bridge's earlier prefix for the same series. Every series that
-has a `btb_` name is **dual-emitted** under both prefixes while
-`-metrics-legacy-prefix` is true (the default), so dashboards keyed on the old
-names keep working. Metrics introduced with the `teranode_bridge_` naming are
-never aliased. Set `-metrics-legacy-prefix=false` once dashboards are migrated.
+`btb_` is the bridge's earlier prefix for the same series. It is off by default.
+`-metrics-legacy-prefix=true` emits every series that has a `btb_` name under
+both prefixes, for a dashboard still on the old names. Metrics introduced with
+the `teranode_bridge_` naming are never aliased.
 
 ## Metric types
 
