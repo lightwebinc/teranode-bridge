@@ -116,7 +116,7 @@ non-zero means the object plane returned different bytes than were published.
 A Kubernetes Helm chart is published from a dedicated chart repository:
 
 - Repository: [`charts/teranode-bridge`](https://github.com/lightwebinc/charts/tree/main/charts/teranode-bridge)
-- OCI: `helm install bridge oci://ghcr.io/lightwebinc/charts/teranode-bridge --version 0.9.0`
+- OCI: `helm install bridge oci://ghcr.io/lightwebinc/charts/teranode-bridge --version 0.10.0`
 
 `config.peerId` is required, and `config.advertise`, `config.propagation` and
 `config.kafka` unless `config.mode=sink`. See the chart README for scaling rules.

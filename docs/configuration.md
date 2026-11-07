@@ -130,7 +130,7 @@ Disabled unless `-blockchain` is set. Ignored entirely in `-mode sink`.
 | -------------------- | ------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `-blockchain`        | (none)  | `192.0.2.10:20087` | Cluster blockchain gRPC `host:port`. Setting it enables the reverse path and **requires** `-local-asset` and `-edge-ingress`. |
 | `-local-asset`       | (none)  | `http://192.0.2.10:20090/api/v1` | Cluster asset base URL **including the API prefix**. Used to fetch objects the cluster produced. |
-| `-edge-ingress`      | (none)  | `2001:db8:1::1` | Host of the object-plane ingress for upward submits. Typically reachable only over the delivery link. |
+| `-edge-ingress`      | (none)  | `2001:db8:1::1,2001:db8:2::1` | Host(s) of the object-plane ingress for upward submits, comma-separated as a failover list (with slot identity, the side-A and side-B slot inners). Typically reachable only over the delivery link. |
 | `-edge-subtree-port` | `8726`  | `8726` | Edge PROXY ingress port for BRC-143 subtree submits: the fabric lane number, not this bridge's 9143 listen.                                           |
 | `-edge-block-port`   | `8727`  | `8727` | Edge PROXY ingress port for BRC-144 block submits: the fabric lane number, not this bridge's 9144 listen.                                             |
 | `-submitter`         | `true`  | `true` | Hold the submitter role on this bridge. Exactly one bridge per cluster should hold it for a given class. |
@@ -680,7 +680,7 @@ they go in the container command (or a chart's `args`).
 ```bash
 docker run --rm \
   -p 8725:8725 -p 9143:9143 -p 9144:9144 -p 9145:9145 \
-  ghcr.io/lightwebinc/teranode-bridge:0.10.1 \
+  ghcr.io/lightwebinc/teranode-bridge:<tag> \
     -advertise   'http://[2001:db8:3f::1]:9145' \
     -propagation 'http://192.0.2.10:20833' \
     -kafka       '192.0.2.10:19092'

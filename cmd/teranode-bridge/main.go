@@ -82,11 +82,11 @@ func main() {
 
 		subtreeTopic = flag.String("subtree-topic", "subtrees-teranode1", "Kafka topic for subtree announcements")
 		blockTopic   = flag.String("block-topic", "blocks-teranode1", "Kafka topic for block announcements")
-		peerID       = flag.String("peer-id", "", "peer identity stamped on announcements; REQUIRED with -mode all (startup refuses empty). Set a valid-format libp2p id that is NOT a real peer (e.g. a freshly derived 12D3KooW… id): the cluster's catchup gate (isPeerBad) treats an unregistered id as unhealthy and diverts catchup to real libp2p peers, while every delivery gate (isPeerMalicious) only checks bans and keeps fetching from us — so the bridge serves objects but can never become a chain-sync source. Empty is UNSAFE: catchup substitutes the announce URL for the missing id, targets our retrieval plane for /headers_from_common_ancestor, 404s, and circuit-breaks the cluster out of recovery (verified at teranode 1cca625; re-verify the two gates on upgrades)")
+		peerID       = flag.String("peer-id", "", "peer identity stamped on announcements; REQUIRED with -mode all (startup refuses empty). Set a valid-format libp2p id that is NOT a real peer (e.g. a freshly derived 12D3KooW… id): the cluster's catchup gate (isPeerBad) treats an unregistered id as unhealthy and diverts catchup to real libp2p peers, while every delivery gate (isPeerMalicious) only checks bans and keeps fetching from us; so the bridge serves objects but can never become a chain-sync source. Empty is UNSAFE: catchup substitutes the announce URL for the missing id, targets our retrieval plane for /headers_from_common_ancestor, 404s, and circuit-breaks the cluster out of recovery (verified at teranode 1cca625; re-verify the two gates on upgrades)")
 
 		blockchain  = flag.String("blockchain", "", "cluster blockchain gRPC host:port; enables the reverse path (cluster -> fabric)")
 		localAsset  = flag.String("local-asset", "", "cluster asset base URL incl. API prefix, e.g. http://192.0.2.10:20090/api/v1 (reverse path)")
-		edgeIngress = flag.String("edge-ingress", "", "up-tunnel submit host(s), reachable only through the tunnel; comma-separated failover list — with slot identity, the tunnel's side-A and side-B slot inners")
+		edgeIngress = flag.String("edge-ingress", "", "up-tunnel submit host(s), reachable only through the tunnel; comma-separated failover list; with slot identity, the tunnel's side-A and side-B slot inners")
 		// 8726/8727, NOT 9143/9144. These name the EDGE PROXY's object ingress,
 		// and the proxy only ever emanates onto the fabric — its lanes are the
 		// fabric's subtree/block numbers whatever transport the submit arrived
@@ -100,7 +100,7 @@ func main() {
 		submitter   = flag.Bool("submitter", true, "hold the submitter role for this cluster; exactly one bridge per class should")
 		submitProbe = flag.String("submitter-probe", "", "primary bridge /readyz URL; set on a STANDBY (-submitter=false) to auto-promote when the primary dies and demote when it returns")
 
-		bcSecurity = flag.Int("blockchain-security-level", 0, "transport security for the blockchain gRPC connection, mirroring Teranode's security_level_grpc: 0 plaintext (upstream default), 1 TLS WITHOUT verifying the server (upstream calls this MITM-exploitable by design), 2/3 TLS presenting a client certificate and verifying the server against a CA. security_level_grpc is GLOBAL cluster-side, so a cluster running any non-zero level cannot be reached by a plaintext dial at all — and only the reverse path fails, which reads as an endless subscribe retry while delivery keeps working")
+		bcSecurity = flag.Int("blockchain-security-level", 0, "transport security for the blockchain gRPC connection, mirroring Teranode's security_level_grpc: 0 plaintext (upstream default), 1 TLS WITHOUT verifying the server (upstream calls this MITM-exploitable by design), 2/3 TLS presenting a client certificate and verifying the server against a CA. security_level_grpc is GLOBAL cluster-side, so a cluster running any non-zero level cannot be reached by a plaintext dial at all; and only the reverse path fails, which reads as an endless subscribe retry while delivery keeps working")
 		bcCACert   = flag.String("blockchain-ca-cert", "", "CA certificate that signs the cluster's gRPC server cert (levels 2-3)")
 		bcCert     = flag.String("blockchain-cert", "", "client certificate presented to the cluster (levels 2-3)")
 		bcKey      = flag.String("blockchain-key", "", "private key for -blockchain-cert (levels 2-3)")
@@ -120,7 +120,7 @@ func main() {
 		submitGrace = flag.Duration("submitter-grace", 45*time.Second, "after start, wait this long before the reverse path may publish; the registry starts empty, so a bridge that publishes immediately can mistake objects the cluster already held for its own")
 		submitBlind = flag.Bool("submitter-when-blind", false, "publish even while no delivery lane is connected; unsafe unless this cluster is the only publisher, because the origin filter needs a live view of the object plane")
 
-		mineTag = flag.String("mine-tag", "", "this cluster's coinbase_arbitrary_text (e.g. /teranode1/); when set, only blocks whose coinbase carries it are published up — stateless origin detection with no Teranode change")
+		mineTag = flag.String("mine-tag", "", "this cluster's coinbase_arbitrary_text (e.g. /teranode1/); when set, only blocks whose coinbase carries it are published up: stateless origin detection with no Teranode change")
 
 		txBatch      = flag.Int("tx-batch", 512, "transactions per batch submit (POST /txs); 1-1023, out-of-range values are clamped. 1023 not 1024: propagation checks its limit at the TOP of the read loop, so a batch of exactly 1024 is fully processed and THEN answered 400")
 		txBatchBytes = flag.Int("tx-batch-bytes", 8<<20, "batch body ceiling in bytes (server cap 32 MiB)")

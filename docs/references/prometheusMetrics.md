@@ -196,14 +196,16 @@ connection.
 
 ## Dashboard
 
-`deploy/grafana/teranode-bridge-dashboard.json` imports as uid `teranode-bridge`
-and templates `$job`/`$instance` off `teranode_bridge_build_info`. Scope it to
-one cluster's bridges: the submitter tile sums an invariant that is per-cluster.
+`deploy/grafana/teranode-bridge-dashboard.json` imports as uid `teranode-bridge`;
+its `$cluster`/`$instance` pickers come from `up{job=~"teranode-bridge.*"}`, so
+they populate while a target is down. The submitter tile sums a per-cluster
+invariant, so the targets need a `cluster` label. See
+[deploy/grafana/README.md](../../deploy/grafana/README.md).
 
 ## Alerting
 
 The expressions worth running. They ship as a `PrometheusRule` in the Helm
-chart (`monitoring.prometheusRule.enabled`).
+chart (`metrics.prometheusRule.enabled`).
 
 | Alert | Expression | Why |
 |-------|-----------|-----|
