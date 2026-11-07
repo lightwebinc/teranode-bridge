@@ -412,7 +412,7 @@ dies, as an endless `blockchain subscribe failed, retrying`.
 | `-blockchain-ca-cert` | (none) | `/etc/teranode-bridge/ca.pem` | CA that signs the cluster's gRPC server certificate (levels 2–3). |
 | `-blockchain-cert` | (none) | `/etc/teranode-bridge/client.pem` | Client certificate presented to the cluster (levels 2–3). |
 | `-blockchain-key` | (none) | `/etc/teranode-bridge/client.key` | Private key for `-blockchain-cert` (levels 2–3). |
-| `-blockchain-api-key-file` | (none) | `/etc/teranode-bridge/grpc-admin.key` | File holding the cluster's `grpc_admin_api_key`, sent as `x-api-key` metadata on every blockchain call (unary and the Subscribe stream). Required by Teranode v0.16.1 and later; read once at start, whitespace trimmed. Empty sends no key, for older clusters. |
+| `-blockchain-api-key-file` | (none) | `/etc/teranode-bridge/grpc-admin.key` | File holding the cluster's `grpc_admin_api_key`, sent as `x-api-key` metadata on every blockchain call (unary and the Subscribe stream). Required by Teranode v0.16.1 and later; read once at start, whitespace trimmed, and a file that holds nothing is refused at startup. Unset sends no key, for older clusters. At security level 0 or 1 the key is not protected from an interceptor, and the bridge warns. |
 
 | Level | Cluster side | Bridge side |
 | --- | --- | --- |

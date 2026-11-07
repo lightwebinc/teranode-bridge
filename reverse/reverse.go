@@ -211,6 +211,10 @@ func New(cfg Config, seen *registry.Registry, build Builder, log *slog.Logger) (
 		)
 	}
 	if cfg.APIKey != "" {
+		if cfg.TLS.SecurityLevel < 2 {
+			log.Warn("the blockchain API key travels without a verified server: level 0 sends it in plaintext and level 1 to an unverified certificate; keep the path on a trusted network or use security level 2 or 3",
+				"security_level", cfg.TLS.SecurityLevel)
+		}
 		opts = append(opts,
 			grpc.WithChainUnaryInterceptor(apiKeyUnary(cfg.APIKey)),
 			grpc.WithChainStreamInterceptor(apiKeyStream(cfg.APIKey)),
