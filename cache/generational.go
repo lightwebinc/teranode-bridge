@@ -13,9 +13,9 @@ import (
 // collector scans; at a million puts per second the process pins its memory
 // limit and collapses into continuous GC. Here an entry is map[Key][]byte and
 // nothing else: no per-entry timestamps, no list, no struct. Aging is
-// generational — every ttl/2, or when the current generation reaches half the
+// generational: every ttl/2, or when the current generation reaches half the
 // byte budget, the previous generation is dropped wholesale and the current
-// one demoted — so eviction is O(1) amortized and precision degrades only in
+// one demoted, so eviction is O(1) amortized and precision degrades only in
 // the direction that does not matter: an entry lives between ttl/2 and ttl.
 //
 // The semantics fit exactly what the tx cache is for: serving subtree_data

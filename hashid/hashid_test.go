@@ -22,7 +22,7 @@ func TestDoubleSHA256AndDisplayAgainstGenesis(t *testing.T) {
 		t.Fatalf("genesis hash display form:\n got %s\nwant %s", got, genesisDisplay)
 	}
 	// Internal order is the byte reversal, so the wire form must NOT equal the
-	// display hex — the bug this package exists to prevent.
+	// display hex, the bug this package exists to prevent.
 	if hex.EncodeToString(h.Wire()) == genesisDisplay {
 		t.Fatal("wire order equals display order; the reversal is missing")
 	}

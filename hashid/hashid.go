@@ -31,7 +31,7 @@ func FromWire(b []byte) (Hash, error) {
 	return h, nil
 }
 
-// DoubleSHA256 returns SHA256d(b) in internal order — the block hash of an
+// DoubleSHA256 returns SHA256d(b) in internal order, the block hash of an
 // 80-byte header, for example.
 func DoubleSHA256(b []byte) Hash {
 	first := sha256.Sum256(b)

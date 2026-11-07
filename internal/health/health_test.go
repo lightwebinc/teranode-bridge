@@ -27,7 +27,7 @@ func badCheck() CheckFunc {
 // Teranode's CheckAll. A shared dependency is seen failing by EVERY bridge in
 // front of a cluster at the same instant; if that failed readiness, all of them
 // would leave the retrieval Service together and strand the pulls for objects
-// they had already announced — turning a degraded announce path into lost
+// they had already announced: turning a degraded announce path into lost
 // objects.
 func TestAdvisoryFailureDoesNotGate(t *testing.T) {
 	status, body := CheckAll(context.Background(), false, false, []Check{

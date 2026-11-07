@@ -19,7 +19,7 @@ type PromoterConfig struct {
 	FailN int
 	// OKN consecutive healthy probes demote it again. Demotion is deliberately
 	// slower than promotion: a flapping primary must not flap the role, and a
-	// transient dual-publish is harmless (every receiver dedups by hash — the
+	// transient dual-publish is harmless (every receiver dedups by hash, the
 	// failure model's "no corruption, just a gap" cuts both ways).
 	OKN int
 	// Probe overrides the HTTP check (tests). Nil uses a GET on ProbeURL.
@@ -41,7 +41,7 @@ func (c *PromoterConfig) defaults() {
 // RunPromoter watches the primary and flips this subscriber's submitter role:
 // FailN consecutive probe failures promote, OKN consecutive successes demote.
 // It runs until ctx is cancelled. The worst case is bounded and benign in both
-// directions — a dead primary costs FailN×Interval of publish gap (the failure
+// directions, a dead primary costs FailN×Interval of publish gap (the failure
 // model's existing "gap until promoted", now measured in seconds instead of an
 // operator's pager), and a false promotion costs a window of dual-publish that
 // hash dedup absorbs.

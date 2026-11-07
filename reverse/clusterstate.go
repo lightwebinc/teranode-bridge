@@ -16,8 +16,8 @@ import (
 // # Why the bridge reads state it does not act on
 //
 // The bridge announces and submits identically whether the cluster is RUNNING,
-// IDLE or CATCHINGBLOCKS. That is deliberate — the cluster is unmodified and
-// decides for itself what to do with an announcement — but it means the most
+// IDLE or CATCHINGBLOCKS. That is deliberate, the cluster is unmodified and
+// decides for itself what to do with an announcement, but it means the most
 // common degraded case has no visible cause from the bridge's own metrics:
 // announcements succeed, pulls never follow, and every bridge counter looks
 // healthy. Publishing the state the cluster reports turns that from a mystery

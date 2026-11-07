@@ -35,7 +35,7 @@ multicast transaction distribution stack:
 Interoperability
 
 This software interoperates with Teranode over its published network
-interfaces only — a propagation HTTP endpoint, Kafka announcement topics,
+interfaces only, a propagation HTTP endpoint, Kafka announcement topics,
 an asset HTTP API, and a blockchain notification stream. It does not
 incorporate, link, or redistribute any Teranode source code. The two
 message contracts it needs are reproduced from their wire definitions:

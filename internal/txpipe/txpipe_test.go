@@ -136,7 +136,7 @@ func TestDependencySealing(t *testing.T) {
 			ids[txidOf(t, tx)] = true
 		}
 		if ids[parentID] && ids[txidOf(t, child)] {
-			t.Fatal("parent and child shared a request — /txs contract violated")
+			t.Fatal("parent and child shared a request: /txs contract violated")
 		}
 	}
 	if s := p.Stats(); s.SealDep != 1 {
@@ -149,7 +149,7 @@ func TestDependencySealing(t *testing.T) {
 // accepted, while the rest of the original batch counts accepted immediately.
 //
 // The mock rejects the named transaction once and accepts it afterwards, which
-// is what really happens — a missing parent lands in a different request while
+// is what really happens, a missing parent lands in a different request while
 // the retry ladder waits. It also asserts the singleton /tx endpoint is never
 // touched: retry cost must scale with batches, not with transactions.
 func TestPartialFailureRetry(t *testing.T) {
@@ -235,7 +235,7 @@ func TestPartialFailureRetry(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if txCalls != 0 {
-		t.Fatalf("singleton /tx calls = %d, want 0 — a retry is a batch", txCalls)
+		t.Fatalf("singleton /tx calls = %d, want 0, a retry is a batch", txCalls)
 	}
 	if txsCalls != 2 {
 		t.Fatalf("/txs requests = %d, want 2 (the batch, then one retry batch)", txsCalls)
@@ -276,7 +276,7 @@ func testLogger() *slog.Logger {
 
 // TestUnattributedErrorLine pins the accounting guard: an error line naming a
 // txid that is not a batch member means the batch's outcome is partly
-// UNKNOWN. Those transactions must not be counted accepted — silently
+// UNKNOWN. Those transactions must not be counted accepted: silently
 // overstating delivery is the failure mode this counter exists to prevent.
 func TestUnattributedErrorLine(t *testing.T) {
 	foreign := strings.Repeat("ab", 32)
@@ -304,14 +304,14 @@ func TestUnattributedErrorLine(t *testing.T) {
 	}
 	waitFor(t, func() bool { return p.Stats().Unattributed == 1 })
 	if s := p.Stats(); s.Accepted != 0 {
-		t.Fatalf("accepted = %d, want 0 — an unknown outcome must never count as delivered", s.Accepted)
+		t.Fatalf("accepted = %d, want 0, an unknown outcome must never count as delivered", s.Accepted)
 	}
 }
 
 // TestWholeBatchFailureSalvages pins the salvage path: when every endpoint
 // refuses the whole batch, the members are retried as ONE further batch rather
-// than written off — a batch-shaped fault does not make its members
-// unacceptable — and the singleton /tx endpoint is never used, because a
+// than written off, a batch-shaped fault does not make its members
+// unacceptable, and the singleton /tx endpoint is never used, because a
 // per-member fan-out is what collapses a real cluster.
 func TestWholeBatchFailureSalvages(t *testing.T) {
 	var txCalls atomic.Int64
@@ -355,19 +355,19 @@ func TestWholeBatchFailureSalvages(t *testing.T) {
 	}
 	waitFor(t, func() bool { return p.Stats().Accepted == 3 })
 	if got := txCalls.Load(); got != 0 {
-		t.Fatalf("singleton /tx submits = %d, want 0 — salvage must be one batch", got)
+		t.Fatalf("singleton /tx submits = %d, want 0: salvage must be one batch", got)
 	}
 	if got := txsCalls.Load(); got != 3 {
 		t.Fatalf("/txs requests = %d, want 3 (submit + failover + one salvage batch)", got)
 	}
 	if s := p.Stats(); s.Failed != 0 {
-		t.Fatalf("failed = %d, want 0 — members were salvageable", s.Failed)
+		t.Fatalf("failed = %d, want 0: members were salvageable", s.Failed)
 	}
 }
 
 // TestDuplicateInputLineAttributesToSubject pins the fix for a real
 // accounting corruption: propagation's duplicate-input error quotes TWO
-// 64-hex hashes — the subject transaction and the prevout it double-spends —
+// 64-hex hashes, the subject transaction and the prevout it double-spends:
 // and matching every hex token in the body booked the prevout as a phantom
 // unattributed failure, subtracting a genuine acceptance for every such line.
 // Only the bracketed subject names a transaction the batch is answering for.
@@ -406,10 +406,10 @@ func TestDuplicateInputLineAttributesToSubject(t *testing.T) {
 	waitFor(t, func() bool { return p.Stats().Rejected == 1 })
 	s := p.Stats()
 	if s.Unattributed != 0 {
-		t.Errorf("unattributed = %d, want 0 — the prevout hash is not a failed transaction", s.Unattributed)
+		t.Errorf("unattributed = %d, want 0, the prevout hash is not a failed transaction", s.Unattributed)
 	}
 	if s.Accepted != 1 {
-		t.Errorf("accepted = %d, want 1 — the unnamed member was processed", s.Accepted)
+		t.Errorf("accepted = %d, want 1, the unnamed member was processed", s.Accepted)
 	}
 }
 
@@ -482,7 +482,7 @@ func TestRateLimitRetriesWholeBatch(t *testing.T) {
 	}
 	waitFor(t, func() bool { return p.Stats().Accepted == 4 })
 	if got := singleCalls.Load(); got != 0 {
-		t.Errorf("/tx called %d times — a throttled batch must not fan out into per-member requests", got)
+		t.Errorf("/tx called %d times, a throttled batch must not fan out into per-member requests", got)
 	}
 	if s := p.Stats(); s.RateLimited != 2 {
 		t.Errorf("RateLimited = %d, want 2", s.RateLimited)

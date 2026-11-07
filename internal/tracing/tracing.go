@@ -13,7 +13,7 @@
 //   - outbound gRPC to the blockchain service, for the reverse path.
 //   - inbound HTTP on the retrieval plane. The cluster's fetch of a subtree or
 //     block happens INSIDE its block-validation span. Without extraction here,
-//     "why was this block slow to validate" dead-ends at the bridge — which is
+//     "why was this block slow to validate" dead-ends at the bridge, which is
 //     the single question an operator is most likely to ask of a landing bridge.
 //
 // # Configuration parity
@@ -99,7 +99,7 @@ func Init(ctx context.Context, cfg Config, log *slog.Logger) (func(context.Conte
 		return nil, fmt.Errorf("tracing: otlp exporter: %w", err)
 	}
 
-	// The identity triple only — the same three attributes logging.Init and the
+	// The identity triple only, the same three attributes logging.Init and the
 	// metrics package attach, so a trace joins a log line and a series on
 	// shared dimensions. Teranode also carries a `commit` attribute from a
 	// separate build variable; the bridge has no such variable (its Version is

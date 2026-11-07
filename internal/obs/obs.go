@@ -1,4 +1,4 @@
-// Package obs owns the bridge's latency, size and freshness instrumentation —
+// Package obs owns the bridge's latency, size and freshness instrumentation:
 // everything the scrape-time collector in internal/metrics cannot express.
 //
 // # Why a second metrics package
@@ -105,7 +105,7 @@ var (
 		"Time to serve one cluster pull, by route.",
 		BucketsMilliSeconds, "route")
 
-	// AnnounceDuration times ProduceSync — the ack from the cluster's Kafka.
+	// AnnounceDuration times ProduceSync, the ack from the cluster's Kafka.
 	AnnounceDuration = hist("announce_duration_seconds",
 		"Time to produce one announcement and receive its acks, by object class.",
 		BucketsMilliSeconds, "class")
@@ -203,7 +203,7 @@ func Collectors() []prometheus.Collector {
 }
 
 // Preset creates the label combinations that must exist for an alert expression
-// to match a freshly restarted process — the same reasoning the metrics package
+// to match a freshly restarted process, the same reasoning the metrics package
 // gives for registering counters directly rather than through the OTel SDK.
 // `time() - metric > N` on an absent series matches nothing, which is exactly
 // the silent failure a staleness alert exists to catch.
@@ -214,12 +214,12 @@ func Collectors() []prometheus.Collector {
 // dashboard panel is unreadable until the first object lands. Seeding with the
 // start time makes the value mean "age since we could first have received one",
 // so a bridge that never receives anything trips the alert exactly N seconds
-// after boot — which is the behaviour the alert was written for.
+// after boot, which is the behaviour the alert was written for.
 func Preset(start time.Time, lanes []string, reverse bool) {
 	t0 := float64(start.Unix())
 
 	// Histograms too. An empty HistogramVec renders as a blank panel and makes
-	// a quantile alert match nothing, which reads identically to "healthy" —
+	// a quantile alert match nothing, which reads identically to "healthy":
 	// the same trap the counters avoid by being registered directly. The label
 	// sets here are closed, so presetting them costs a fixed handful of series.
 	for _, l := range lanes {
@@ -270,7 +270,7 @@ func SetFSMState(name string, code float64) {
 //
 // Bounded on purpose: an object that is never pulled would otherwise leak an
 // entry forever. Entries older than the retention window are swept, and the map
-// is hard-capped — past the cap new announcements are simply not tracked, which
+// is hard-capped: past the cap new announcements are simply not tracked, which
 // costs an observation, never memory.
 type FirstPull struct {
 	mu      sync.Mutex

@@ -1,9 +1,9 @@
-# propbench — propagation-only Teranode, for measuring the bridge -> cluster
+# propbench: propagation-only Teranode, for measuring the bridge -> cluster
 # ingest edge without a fully-resourced cluster.
 #
 # Runs exactly three containers: redpanda, Teranode's blockchain service (FSM
 # forced to RUNNING, SQLite store) and Teranode's propagation service. There is
-# no validator, no UTXO store, no block assembly, no asset service — propagation
+# no validator, no UTXO store, no block assembly, no asset service: propagation
 # does its real production work (parse, sanity checks, tx-store write, Kafka
 # publish) and the validatortxs topic is the sink.
 #

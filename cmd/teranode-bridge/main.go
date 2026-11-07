@@ -88,7 +88,7 @@ func main() {
 		localAsset  = flag.String("local-asset", "", "cluster asset base URL incl. API prefix, e.g. http://192.0.2.10:20090/api/v1 (reverse path)")
 		edgeIngress = flag.String("edge-ingress", "", "up-tunnel submit host(s), reachable only through the tunnel; comma-separated failover list; with slot identity, the tunnel's side-A and side-B slot inners")
 		// 8726/8727, NOT 9143/9144. These name the EDGE PROXY's object ingress,
-		// and the proxy only ever emanates onto the fabric — its lanes are the
+		// and the proxy only ever emanates onto the fabric, its lanes are the
 		// fabric's subtree/block numbers whatever transport the submit arrived
 		// over. 9143/9144 are consumer-side numbers: the delivery lanes THIS
 		// bridge listens on (-subtree-listen/-block-listen above), which the
@@ -221,7 +221,7 @@ func main() {
 	// `seen` records that a hash crossed the bridge (the reverse path's origin
 	// filter and the echo detector both read it), while this records the
 	// announce verdict, and only a successful announce writes to it. That is
-	// what makes a failed announce self-healing — the object is announced again
+	// what makes a failed announce self-healing, the object is announced again
 	// on the next redelivery instead of sitting cached and invisible. Same TTL
 	// and ceiling as `seen` because it took the announce gate over from it, and
 	// a different window would silently change how long a redelivered object
@@ -538,7 +538,7 @@ func announceFlagsErr(propagationN, brokersN int, advertise, peerID string) stri
 //
 // The lane carries BRC-30 extended format only. A BRC-12 standard transaction
 // is well-framed and walks fine, so nothing downstream would catch it until
-// propagation refuses it on its merits — by which point it has consumed a cache
+// propagation refuses it on its merits: by which point it has consumed a cache
 // slot, a registry entry (poisoning dedupe for the EF copy that follows) and a
 // batch slot, and the refusal reads as a cluster fault instead of a sender bug.
 // Refuse it here, where the cause is still legible.
@@ -625,7 +625,7 @@ func probeHealth(ctx context.Context, endpoints []string) error {
 
 // announcer is the announce seam the lane handlers publish through:
 // *announce.Producer in production, a stub in tests. A nil announcer is sink
-// mode — receive, verify, cache, tell no one.
+// mode: receive, verify, cache, tell no one.
 type announcer interface {
 	Subtree(ctx context.Context, displayHash, baseURL string) error
 	Block(ctx context.Context, displayHash, baseURL string) error
@@ -646,7 +646,7 @@ var _ announcer = (*announce.Producer)(nil)
 // and is not retried; the lane counts a handler error and moves on. So a
 // delivery whose announce FAILED was still recorded as handled, every later
 // redelivery returned early, and the cluster was never told about an object the
-// bridge holds and can serve — until the entry aged out and the object happened
+// bridge holds and can serve: until the entry aged out and the object happened
 // to be delivered again. The object is cached either way: the retrieval plane
 // has to be able to serve the pull a later re-announce provokes.
 func handleSubtree(ctx context.Context, obj []byte, objects *cache.Cache, seen, announced *registry.Registry,
@@ -678,7 +678,7 @@ func handleSubtree(ctx context.Context, obj []byte, objects *cache.Cache, seen, 
 	if _, done := announced.Lookup(registry.Key(root)); done {
 		// Lookup, not Mark, because Mark would INSERT an object nobody has been
 		// told about. Mark only on the way out, where it merely refreshes the
-		// entry — so an object the fabric keeps redelivering stays suppressed
+		// entry, so an object the fabric keeps redelivering stays suppressed
 		// for as long as it keeps arriving, exactly as when `seen` was the gate.
 		announced.Mark(registry.Key(root), registry.Delivered)
 		log.Debug("subtree already announced, not re-announced", "root", root.Display())
@@ -694,8 +694,8 @@ func handleSubtree(ctx context.Context, obj []byte, objects *cache.Cache, seen, 
 	if err := producer.Subtree(ctx, root.Display(), baseURL); err != nil {
 		return err
 	}
-	// Direction is meaningless in this registry — it holds one fact, "the
-	// cluster has been told" — so every entry uses Delivered.
+	// Direction is meaningless in this registry: it holds one fact, "the
+	// cluster has been told", so every entry uses Delivered.
 	announced.Mark(registry.Key(root), registry.Delivered)
 	return nil
 }
@@ -716,8 +716,8 @@ func handleBlock(ctx context.Context, obj []byte, objects *cache.Cache, seen, an
 	objects.Put(cache.Key(id), "block", obj)
 
 	// A block on a delivery lane came from the object plane, and it names every
-	// subtree it contains. Marking those roots now — before the cluster finishes
-	// validating the block and starts emitting subtree notifications for them —
+	// subtree it contains. Marking those roots now: before the cluster finishes
+	// validating the block and starts emitting subtree notifications for them:
 	// is what stops this cluster republishing another cluster's subtrees when
 	// gossip wins the race. The block itself is covered by the mine tag; its
 	// subtrees have no such marker of their own, so they inherit the block's.
@@ -730,7 +730,7 @@ func handleBlock(ctx context.Context, obj []byte, objects *cache.Cache, seen, an
 	// that contains them and fetches them while validating it, so a copy
 	// arriving afterwards on the subtree lane is not news. If the block's own
 	// announce fails, the block is re-announced on its next redelivery and
-	// carries its subtrees with it — the same self-healing path, one level up.
+	// carries its subtrees with it, the same self-healing path, one level up.
 	if roots, err := tnwire.SubtreeRootsOf(obj); err == nil {
 		for _, r := range roots {
 			seen.Mark(registry.Key(r), registry.Delivered)
@@ -886,7 +886,7 @@ func (s cacheStore) Put(h hashid.Hash, class string, body []byte) {
 // nilIfNil keeps a typed-nil *UpTunnel from becoming a non-nil Publisher
 // interface, which would make the reverse path try to send through nothing.
 // ingressAddrs expands a comma-separated -edge-ingress host list into host:port
-// targets for one class, preserving order — the first entry is the preferred
+// targets for one class, preserving order, the first entry is the preferred
 // (normally active-side) target.
 func ingressAddrs(hosts string, port int) []string {
 	var out []string
@@ -917,7 +917,7 @@ func nilIfNil(u *submit.UpTunnel) reverse.Publisher {
 //   - at least one live delivery lane, because "did this come from the object
 //     plane?" is unanswerable while nothing is being delivered. Blocks are
 //     covered by the mine tag, but subtrees inherit their origin from the block
-//     that names them — and that block arrives on a lane.
+//     that names them, and that block arrives on a lane.
 //
 // Anything genuinely ours that is skipped here is not lost: it stays in the
 // cluster, and the cluster keeps announcing it.
@@ -927,7 +927,7 @@ func submitterReady(laneSet []*lanes.Lane, started time.Time, grace time.Duratio
 	// block frame carries this cluster's mine tag and names every subtree it
 	// contains, so it is the only thing that can prove an object came from the
 	// object plane rather than from gossip. Judging readiness on the tx lane
-	// would arm the submitter while blind to exactly the evidence it needs —
+	// would arm the submitter while blind to exactly the evidence it needs:
 	// which is how a cluster ends up republishing another cluster's subtrees.
 	need := map[string]bool{"subtree": true, "block": true}
 	return func() bool {
@@ -961,13 +961,13 @@ func submitterReady(laneSet []*lanes.Lane, started time.Time, grace time.Duratio
 //   - lanes and the retrieval plane GATE. Without a bound lane the bridge
 //     cannot accept delivery at all, and without the retrieval plane an
 //     announcement it has already sent points at a socket that will not answer
-//     — the cluster does not retry a failed subtree fetch, so that object is
+//     , the cluster does not retry a failed subtree fetch, so that object is
 //     simply lost. Both are conditions only this process can be in, which is
 //     also what makes them safe to gate on: a shared outage cannot take every
 //     bridge out of rotation at once.
 //   - Kafka, propagation, the asset service and the cluster's FSM are ADVISORY.
 //     Each is shared by every bridge in front of the cluster, so gating on them
-//     would remove all of them from the retrieval Service simultaneously — and
+//     would remove all of them from the retrieval Service simultaneously, and
 //     a bridge with dead Kafka still holds a cache full of objects the cluster
 //     has already been told about and is about to ask for. Reporting the fault
 //     while continuing to serve is strictly better than going dark.

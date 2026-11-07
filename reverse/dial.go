@@ -19,7 +19,7 @@ teranode/util/grpc_helper.go (loadTLSCredentials + the client keepalive block).
 # Why TLS is an interop question, not just a hardening one
 
 `security_level_grpc` is a GLOBAL Teranode setting. When it is non-zero,
-util.StartGRPCServer wraps EVERY Teranode gRPC listener — blockchain included —
+util.StartGRPCServer wraps EVERY Teranode gRPC listener: blockchain included:
 in TLS. A bridge that dials plaintext cannot connect to such a cluster at all,
 and the failure is partial in the worst way: the delivery lanes, the announce
 path and the retrieval plane keep working, so only the reverse path dies, as an
@@ -34,11 +34,11 @@ endless "blockchain subscribe failed, retrying".
 	2  TLS; the server accepts any client certificate. Client-side this means
 	   presenting a certificate AND verifying the server against a CA.
 	3  TLS; the server requires and verifies the client certificate. The CLIENT
-	   side is identical to level 2 — only the server's ClientAuth differs.
+	   side is identical to level 2, only the server's ClientAuth differs.
 
 # A limit worth knowing before choosing a level
 
-No Teranode client call site populates CertFile/KeyFile/CaCertFile — only the
+No Teranode client call site populates CertFile/KeyFile/CaCertFile, only the
 SERVER path (util/grpc.go) fills them, from server_certFile/server_keyFile. So at
 level 2 or 3 upstream's own inter-service clients hit os.ReadFile("") and fail to
 dial. In practice a working cluster runs at level 0 or 1, and level 1 is the one
@@ -52,7 +52,7 @@ Teranode gives its gRPC clients a retry interceptor; the bridge deliberately
 does not adopt it.
 
 It is UNARY-ONLY (grpc.WithChainUnaryInterceptor), so it would never touch the
-Subscribe stream that carries the reverse path — the one call whose recovery
+Subscribe stream that carries the reverse path, the one call whose recovery
 actually matters, and which already has its own reconnect loop with exponential
 backoff. What is left is the two cluster-state polls, which run on a 15s ticker
 under a 5s deadline and record their own failures; retrying inside that deadline
@@ -61,7 +61,7 @@ buys nothing the next tick does not.
 Upstream's implementation would also import two defects. Its backoff is a bare
 time.Sleep with no select on ctx.Done(), so a cancelled call still sleeps the
 full ladder; and it retries codes.DeadlineExceeded, which for an EXPIRED CONTEXT
-can never succeed — every remaining attempt fails instantly and the sleeps are
+can never succeed: every remaining attempt fails instantly and the sleeps are
 pure delay on a doomed call.
 */
 
@@ -100,7 +100,7 @@ func (t TLSConfig) credentials() (credentials.TransportCredentials, error) {
 		if !pool.AppendCertsFromPEM(caCert) {
 			// Upstream ignores this return value, so a PEM with no parseable
 			// certificate yields an empty pool and a verification failure at
-			// handshake time — a TLS error that reads like a server problem.
+			// handshake time, a TLS error that reads like a server problem.
 			// Fail here instead, where the cause is still the file.
 			return nil, fmt.Errorf("ca cert %s contains no usable certificate", t.CACertFile)
 		}
@@ -138,7 +138,7 @@ const (
 //
 // # Why this is load-bearing and not tuning
 //
-// grpc-go's client keepalive default is INFINITY — a client with no explicit
+// grpc-go's client keepalive default is INFINITY, a client with no explicit
 // policy never pings. The bridge's blockchain connection is a single long-lived
 // Subscribe stream that crosses a tunnel, and a silently dropped path
 // (WireGuard rekey, conntrack eviction, a firewall losing state) does not close
@@ -149,7 +149,7 @@ const (
 // eventually tear down its own half, but the client's blocked Recv never learns
 // that. Blockchain also sends PING notifications every 10s
 // (blockchain_heartbeat_interval), so the wedge is VISIBLE within seconds on
-// teranode_bridge_last_notification_timestamp_seconds — but visible is not
+// teranode_bridge_last_notification_timestamp_seconds, but visible is not
 // self-healing, and before this the only recovery was a human restarting the
 // process.
 //
@@ -161,7 +161,7 @@ const (
 // Time must be >= the server's KeepaliveEnforcementPolicy.MinTime
 // (grpc_server_min_ping_time_seconds, default 30s). Ping faster than that and
 // the server answers GOAWAY ENHANCE_YOUR_CALM "too_many_pings" and drops the
-// connection — which the reconnect loop would then retry, turning a liveness
+// connection, which the reconnect loop would then retry, turning a liveness
 // mechanism into a ping storm. The default here equals upstream's client
 // default, so it is safe against a stock cluster; raise it in lockstep if an
 // operator raises MinTime.

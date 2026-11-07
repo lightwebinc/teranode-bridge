@@ -19,7 +19,7 @@ func main() {
 	conns := flag.Int("conns", 16, "concurrent posting goroutines")
 	// 1023, not 1024: propagation checks `totalNrTransactions >=
 	// maxTransactionsPerRequest` at the top of its read loop, so a batch of
-	// exactly 1024 is fully processed and THEN answered 400 — a default run
+	// exactly 1024 is fully processed and THEN answered 400, a default run
 	// would report rate=0 while the server did all the work.
 	per := flag.Int("batch", 1023, "transactions per request (server accepts at most 1023)")
 	dur := flag.Duration("dur", 10*time.Second, "run length")
@@ -74,7 +74,7 @@ func main() {
 		ok.Load(), bad.Load(), txs.Load(), float64(txs.Load())/dur.Seconds())
 	fmt.Printf("status codes: %s\n", byStatus.String())
 	fmt.Println("NOTE: this counts only what the SERVER confirmed with 200. Compare it against the")
-	fmt.Println("validatortxs high-watermark delta (propbench.sh reports it) — a gap between the two")
+	fmt.Println("validatortxs high-watermark delta (propbench.sh reports it), a gap between the two")
 	fmt.Println("means transactions were processed and then reported as failed.")
 }
 

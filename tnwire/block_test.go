@@ -62,7 +62,7 @@ func TestBlockToTeranodeRoundTrip(t *testing.T) {
 		t.Fatalf("transcode: %v", err)
 	}
 
-	// Header is copied verbatim — the block hash must not change.
+	// Header is copied verbatim, the block hash must not change.
 	if !bytes.Equal(out[:80], obj[:80]) {
 		t.Fatal("header not preserved")
 	}
@@ -194,7 +194,7 @@ func TestBlockRoundTripNoBUMP(t *testing.T) {
 }
 
 // Teranode's own parser tolerates a body that ends right after the height, so
-// ours must too — and must yield an empty BUMP rather than an error.
+// ours must too, and must yield an empty BUMP rather than an error.
 func TestFromTeranodeToleratesMissingBUMPField(t *testing.T) {
 	original := buildBRC144(t, [][]byte{bytes.Repeat([]byte{0x44}, 32)}, nil, 9)
 	tn, err := ToTeranode(original)

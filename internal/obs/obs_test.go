@@ -44,9 +44,9 @@ func TestFirstPullObservesOnce(t *testing.T) {
 	}
 }
 
-// TestFirstPullIgnoresUnknown pins that a pull we never announced — an object
+// TestFirstPullIgnoresUnknown pins that a pull we never announced, an object
 // the cluster asks for because a peer told it, or one announced before restart
-// — is silently ignored rather than observed with a nonsense duration.
+// : is silently ignored rather than observed with a nonsense duration.
 func TestFirstPullIgnoresUnknown(t *testing.T) {
 	f := NewFirstPull(16, time.Minute)
 	before := sampleCount(t, AnnounceToFirstPull, "block")
@@ -89,8 +89,8 @@ func TestFirstPullExpires(t *testing.T) {
 	}
 }
 
-// TestNilFirstPullIsSafe pins that a bridge built without the tracker — sink
-// mode has no announce side — never dereferences it.
+// TestNilFirstPullIsSafe pins that a bridge built without the tracker: sink
+// mode has no announce side, never dereferences it.
 func TestNilFirstPullIsSafe(t *testing.T) {
 	var f *FirstPull
 	f.Announced("aa", "subtree")
@@ -153,7 +153,7 @@ func TestPresetCreatesSeriesAtZero(t *testing.T) {
 
 	// Seeded with the START time, not zero. `time() - 0` is fifty-odd years, so
 	// a zero seed would fire every staleness alert the instant the process
-	// started — the opposite of the behaviour the alert was written for.
+	// started, the opposite of the behaviour the alert was written for.
 	g, err := LastObjectTime.GetMetricWithLabelValues("tx")
 	if err != nil {
 		t.Fatalf("label values: %v", err)

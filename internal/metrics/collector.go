@@ -77,7 +77,7 @@ var (
 	laneDropped = newPair("lane_connections_dropped_total",
 		"Connections dropped on a framing fault. Bare streams have no resync point, so every byte after a codec fault is suspect and the connection must go.", []string{"lane"})
 	laneRejected = newPair("lane_objects_rejected_total",
-		"Well-framed objects refused on lane format policy — on `tx`, a transaction that is not BRC-30 extended format. The object is discarded and the connection kept; a non-zero rate means a sender is emitting the wrong format, not that the cluster is unhealthy.", []string{"lane"})
+		"Well-framed objects refused on lane format policy: on `tx`, a transaction that is not BRC-30 extended format. The object is discarded and the connection kept; a non-zero rate means a sender is emitting the wrong format, not that the cluster is unhealthy.", []string{"lane"})
 
 	cacheEntries = newPair("cache_entries",
 		"Objects currently held.", []string{"kind"})
@@ -97,7 +97,7 @@ var (
 	registryEntries = newPair("registry_entries",
 		"Hashes currently in the seen-registry.", nil)
 	registryDups = newPair("registry_duplicates_total",
-		"Objects recognised as already seen — re-delivery after a failover or reconnect, or our own echo returning.", nil)
+		"Objects recognised as already seen: re-delivery after a failover or reconnect, or our own echo returning.", nil)
 
 	submitTotal = newPair("submit_total",
 		"Transactions handed to the cluster's propagation service, by outcome. `rejected` is the cluster refusing on merits (after any retries); `failed` is transport or server fault.", []string{"outcome"})
@@ -113,9 +113,9 @@ var (
 	pipeRetryOK = newPair("txpipe_retry_accepted_total",
 		"Retried transactions the cluster then accepted.", nil)
 	pipeUnattributed = newPair("txpipe_unattributed_total",
-		"Error lines in a partial-failure response that named no member of the batch they answered. The outcome of that many transactions is UNKNOWN — they are excluded from `accepted` rather than assumed good, so a non-zero rate here means delivery counts are incomplete, not that delivery failed.", nil)
+		"Error lines in a partial-failure response that named no member of the batch they answered. The outcome of that many transactions is UNKNOWN: they are excluded from `accepted` rather than assumed good, so a non-zero rate here means delivery counts are incomplete, not that delivery failed.", nil)
 	pipeRateLimited = newPair("txpipe_rate_limited_total",
-		"Batches refused by a propagation endpoint's HTTP rate limiter (429). The limiter is per source IP and per endpoint, so a sustained rate here means one bridge is saturating one endpoint — add endpoints or raise the server's limit; batch size will not help.", nil)
+		"Batches refused by a propagation endpoint's HTTP rate limiter (429). The limiter is per source IP and per endpoint, so a sustained rate here means one bridge is saturating one endpoint: add endpoints or raise the server's limit; batch size will not help.", nil)
 	pipeQueue = newPair("txpipe_queue_depth",
 		"Transactions waiting in the pipe. At the ceiling, backpressure blocks the lane read loop.", nil)
 
@@ -124,9 +124,9 @@ var (
 	announceFailures = newPair("announce_failures_total",
 		"Announcements that failed to produce. The object stays cached and servable and is not recorded as announced, so its next redelivery announces it again.", nil)
 	announceBuffered = newModern("kafka_producer_buffered_records",
-		"Records the Kafka client still holds unproduced. A sustained non-zero level is an announce BACKLOG — objects the cluster has not been told about yet, which no failure counter reports.", nil)
+		"Records the Kafka client still holds unproduced. A sustained non-zero level is an announce BACKLOG: objects the cluster has not been told about yet, which no failure counter reports.", nil)
 	announceAwaitingPull = newModern("announce_awaiting_pull",
-		"Announcements acked but not yet followed by a pull. A level that keeps climbing means the cluster is not acting on announcements — the failure mode the announce-shim design is most exposed to.", nil)
+		"Announcements acked but not yet followed by a pull. A level that keeps climbing means the cluster is not acting on announcements, the failure mode the announce-shim design is most exposed to.", nil)
 
 	retrievalServed = newPair("retrieval_served_total",
 		"Cluster pulls served from the cache, by route.", []string{"route"})
@@ -135,7 +135,7 @@ var (
 	retrievalErrors = newPair("retrieval_errors_total",
 		"Pulls answered 5xx on a genuine bridge-side fault.", nil)
 	retrievalUnserved = newPair("retrieval_unserved_route_total",
-		"Requests for routes the bridge does not serve at all, by class. class=\"chain_sync\" is the canary for the catchup-divert: the cluster selected the bridge as a chain-sync source. Rare bursts accompany multi-peer degradation (the cached-alternatives walk skips the divert gate); a SUSTAINED rate means the synthetic peer-id no longer diverts catchup — the id was registered or gate semantics changed on upgrade — and must alarm before the next node falls behind.", []string{"class"})
+		"Requests for routes the bridge does not serve at all, by class. class=\"chain_sync\" is the canary for the catchup-divert: the cluster selected the bridge as a chain-sync source. Rare bursts accompany multi-peer degradation (the cached-alternatives walk skips the divert gate); a SUSTAINED rate means the synthetic peer-id no longer diverts catchup (the id was registered or gate semantics changed on upgrade) and must alarm before the next node falls behind.", []string{"class"})
 
 	reversePublished = newPair("reverse_published_total",
 		"Objects this cluster produced that were published back onto the object plane, by class.", []string{"class"})
@@ -147,7 +147,7 @@ var (
 		"1 while this bridge holds the submitter role (publishes cluster output upward), 0 on a standby. Across one cluster this must SUM TO EXACTLY 1 per class: 0 means nothing is published upward, 2 means double publish.", nil)
 
 	reverseReconnects = newPair("reverse_reconnects_total",
-		"Blockchain notification stream reconnects. Routine — the cluster rolls its gRPC connections.", nil)
+		"Blockchain notification stream reconnects. Routine, the cluster rolls its gRPC connections.", nil)
 
 	upObjects = newPair("uptunnel_objects_total",
 		"Objects written to the object-plane ingress, by class.", []string{"class"})
@@ -161,7 +161,7 @@ var (
 	echoVerified = newPair("echo_verified_total",
 		"Objects this bridge published that returned on its own delivery lanes byte-identical.", nil)
 	echoMismatch = newPair("echo_mismatch_total",
-		"Objects that returned on the delivery lanes with DIFFERENT bytes than were published — an object-plane data-integrity fault, never expected to be non-zero.", nil)
+		"Objects that returned on the delivery lanes with DIFFERENT bytes than were published, an object-plane data-integrity fault, never expected to be non-zero.", nil)
 
 	buildInfo = newPair("build_info",
 		"Build identity (value always 1).", []string{"version", "instance"})

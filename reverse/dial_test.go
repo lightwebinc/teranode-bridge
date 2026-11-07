@@ -206,7 +206,7 @@ func TestKeepaliveBelowGrpcFloorIsReported(t *testing.T) {
 // --- the actual failure mode: a silently dead path ---------------------------
 
 // blackhole is a TCP relay that can stop forwarding WITHOUT closing either
-// socket — the shape of a WireGuard rekey, a conntrack eviction or a firewall
+// socket, the shape of a WireGuard rekey, a conntrack eviction or a firewall
 // losing state. This is what makes the bug invisible: nothing errors, the
 // connection just stops carrying bytes.
 type blackhole struct {
@@ -266,7 +266,7 @@ func (b *blackhole) pump(src, dst net.Conn) {
 }
 
 // startSilentBlockchain runs a real BlockchainAPI server that accepts a
-// Subscribe stream and then sends nothing — an idle cluster.
+// Subscribe stream and then sends nothing, an idle cluster.
 func startSilentBlockchain(t *testing.T) (addr string, opened chan struct{}) {
 	t.Helper()
 	srv := &silentServer{opened: make(chan struct{}, 1), stop: make(chan struct{})}
@@ -353,7 +353,7 @@ func TestKeepaliveRecoversASilentlyDeadPath(t *testing.T) {
 	bh.drop()
 
 	if !waitReconnect(sub, 25*time.Second) {
-		t.Fatal("the bridge never noticed a silently dead path — Recv is wedged, " +
+		t.Fatal("the bridge never noticed a silently dead path: Recv is wedged, " +
 			"and before keepalive that state persisted until someone restarted the process")
 	}
 }

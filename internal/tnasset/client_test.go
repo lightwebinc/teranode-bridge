@@ -21,7 +21,7 @@ func shortenLadder(t *testing.T) {
 
 // TestRetriesThrough429 pins the reason the ladder exists: the asset limiter
 // trips on a burst of mined blocks, and without retry those objects are
-// silently never published — indistinguishable downstream from "the miner
+// silently never published: indistinguishable downstream from "the miner
 // produced nothing".
 func TestRetriesThrough429(t *testing.T) {
 	shortenLadder(t)
@@ -106,6 +106,6 @@ func TestContextCancelDuringBackoff(t *testing.T) {
 		t.Fatal("want a cancellation error")
 	}
 	if el := time.Since(start); el > 2*time.Second {
-		t.Fatalf("took %s — did not observe cancellation during backoff", el)
+		t.Fatalf("took %s: did not observe cancellation during backoff", el)
 	}
 }

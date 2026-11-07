@@ -5,7 +5,7 @@
 // source: proto/blockchain_api/blockchain.proto
 
 // Package blockchain_api is a MINIMAL, wire-compatible subset of Teranode's
-// blockchain service — just enough to subscribe to its notification stream.
+// blockchain service: just enough to subscribe to its notification stream.
 //
 // Only four things are load-bearing on the wire: the proto package name, the
 // service name, the method name, and the field numbers. Everything else here is

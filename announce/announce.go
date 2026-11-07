@@ -37,9 +37,9 @@ type Message struct {
 
 // Encode returns the protobuf wire encoding. Fields are written in ascending
 // number order and empty strings are omitted, which is what proto3's canonical
-// encoder does — an explicitly-encoded empty field is legal but non-canonical,
+// encoder does, an explicitly-encoded empty field is legal but non-canonical,
 // and a PeerID left empty against guidance is omitted entirely (see
-// Config.PeerID — real deployments must set a synthetic id).
+// Config.PeerID: real deployments must set a synthetic id).
 func (m Message) Encode() []byte {
 	var b []byte
 	if m.Hash != "" {
@@ -102,7 +102,7 @@ type Config struct {
 	// identity derived from a fresh key and registered with no p2p service.
 	// The cluster's catchup gate treats an unregistered id as unhealthy and
 	// diverts chain sync to real libp2p peers, while the delivery gates only
-	// check bans and keep pulling objects from the bridge — so the bridge
+	// check bans and keep pulling objects from the bridge, so the bridge
 	// augments the network without ever becoming a sync source. EMPTY IS
 	// UNSAFE: catchup substitutes the announce URL for a missing id, targets
 	// the bridge's retrieval plane for the header chain, 404s, and
@@ -144,11 +144,11 @@ func New(cfg Config, log *slog.Logger) (*Producer, error) {
 		// (teranode/util/kafka/producer_hooks.go). Without it an announce
 		// BACKLOG is invisible: the failure counter only moves once produce
 		// actually fails, while a producer merely falling behind reports
-		// nothing — and an object the cluster is never told about is as lost
+		// nothing, and an object the cluster is never told about is as lost
 		// as one that failed to send.
 		kgo.WithHooks(kafka.NewHook()),
 		// The consumers are ordinary Kafka consumers; nothing here needs
-		// transactions or idempotent producer semantics — a duplicate announce
+		// transactions or idempotent producer semantics, a duplicate announce
 		// is harmless because the cluster dedups by hash.
 		kgo.ProducerBatchMaxBytes(16<<20),
 		kgo.RequiredAcks(kgo.AllISRAcks()),
@@ -160,7 +160,7 @@ func New(cfg Config, log *slog.Logger) (*Producer, error) {
 }
 
 // Ping verifies the brokers are reachable and the advertised listener resolves
-// from here — a misadvertised listener otherwise fails only at produce time.
+// from here, a misadvertised listener otherwise fails only at produce time.
 func (p *Producer) Ping(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, p.cfg.Timeout)
 	defer cancel()
@@ -207,7 +207,7 @@ func (p *Producer) produce(ctx context.Context, topic, class string, m Message) 
 		return fmt.Errorf("announce: produce to %s: %w", topic, err)
 	}
 	// Timed around ProduceSync, so this is the ack latency the cluster's Kafka
-	// actually imposes — not the client-side enqueue.
+	// actually imposes, not the client-side enqueue.
 	obs.Since(obs.AnnounceDuration, start, class)
 	obs.Stamp(obs.LastAnnounceTime, class)
 	p.firstPull.Announced(m.Hash, class)

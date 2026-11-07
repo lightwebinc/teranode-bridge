@@ -29,7 +29,7 @@ import (
 //
 // Without these, an announce BACKLOG is invisible: `announce_failures_total`
 // only moves once produce actually fails, while a producer that is merely
-// falling behind shows nothing at all — and a subtree the cluster is never told
+// falling behind shows nothing at all, and a subtree the cluster is never told
 // about is exactly as lost as one that failed to send.
 const subsystem = "bridge_kafka_producer"
 
@@ -98,8 +98,8 @@ func (k set) Collect(ch chan<- prometheus.Metric) {
 }
 
 // produceAPIKey is the Kafka protocol API key for Produce requests. The write
-// and e2e hooks fire for every request type the client makes — metadata,
-// ApiVersions, heartbeats — and folding those into a "produce latency"
+// and e2e hooks fire for every request type the client makes: metadata,
+// ApiVersions, heartbeats, and folding those into a "produce latency"
 // histogram would quietly bias it downward.
 const produceAPIKey int16 = 0
 

@@ -219,7 +219,7 @@ func TestBaseURL(t *testing.T) {
 }
 
 // TestNotFoundClassifiesChainSyncRoutes pins the canary: a chain-sync route
-// request must count under UnservedChainSync — it is the signal that the
+// request must count under UnservedChainSync: it is the signal that the
 // cluster selected the bridge as a catchup source, which the synthetic
 // peer-id divert exists to prevent.
 func TestNotFoundClassifiesChainSyncRoutes(t *testing.T) {
@@ -234,7 +234,7 @@ func TestNotFoundClassifiesChainSyncRoutes(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
 		if rec.Code != http.StatusNotFound {
-			t.Fatalf("%s: status = %d, want 404 — a chain route must fail loudly, not pretend", path, rec.Code)
+			t.Fatalf("%s: status = %d, want 404, a chain route must fail loudly, not pretend", path, rec.Code)
 		}
 	}
 	st := s.Stats()
@@ -254,9 +254,9 @@ func TestNotFoundClassifiesChainSyncRoutes(t *testing.T) {
 // the announce side starts the stopwatch, a real pull through the real route
 // table stops it, and only the FIRST pull counts.
 //
-// This is the one measurement neither the fabric nor the cluster makes — the
+// This is the one measurement neither the fabric nor the cluster makes, the
 // cluster does not know when it was told, and the fabric does not know when the
-// cluster acted — so if the wiring between the two halves breaks, nothing else
+// cluster acted, so if the wiring between the two halves breaks, nothing else
 // fails to notice.
 func TestFirstPullClosesTheLoop(t *testing.T) {
 	s, objects, _, h := testServer(t)
@@ -304,8 +304,8 @@ func TestListeningGatesReadiness(t *testing.T) {
 // freshness gauge: "the cluster is still fetching objects from us".
 //
 // The catch-all is timed but must not stamp it. A cluster that had stopped
-// pulling entirely while still occasionally probing an unserved route — a
-// chain-sync attempt, a stray /tx — would otherwise keep the gauge fresh, and
+// pulling entirely while still occasionally probing an unserved route, a
+// chain-sync attempt, a stray /tx: would otherwise keep the gauge fresh, and
 // the staleness alert built on it would never fire.
 func TestUnservedRouteDoesNotStampLastPull(t *testing.T) {
 	_, _, _, h := testServer(t)
@@ -337,7 +337,7 @@ func TestUnservedRouteDoesNotStampLastPull(t *testing.T) {
 			"pulling but kept probing would look fresh forever", got)
 	}
 
-	// A route the bridge actually serves must stamp it, 404 or not — the
+	// A route the bridge actually serves must stamp it, 404 or not, the
 	// cluster asked us for an object, which is the thing being measured.
 	obs.LastPullTime.WithLabelValues().Set(0)
 	resp, err = h.Client().Get(h.URL + "/api/v1/subtree/" + hashid.Hash([32]byte{1}).Display())

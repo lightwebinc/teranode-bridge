@@ -143,7 +143,7 @@ func FromTeranode(b []byte) (encode.Block, error) {
 	off += n
 
 	if off >= len(b) {
-		return out, nil // no BUMP field at all — legal
+		return out, nil // no BUMP field at all: legal
 	}
 	bumpLen, n := readVarInt(b[off:])
 	if n <= 0 {
@@ -162,7 +162,7 @@ func FromTeranode(b []byte) (encode.Block, error) {
 // It exists for origin detection: `coinbase_arbitrary_text` is per-node
 // Teranode CONFIGURATION stamped into every block that node mines, so a bridge
 // that knows its own cluster's tag can tell locally-mined blocks from blocks
-// the cluster merely learned about — statelessly, from block content alone,
+// the cluster merely learned about: statelessly, from block content alone,
 // with no Teranode code change and no reliance on in-memory registry state
 // that a restart wipes.
 func CoinbaseOf(obj []byte) ([]byte, error) {
@@ -239,7 +239,7 @@ func readVarInt(b []byte) (uint64, int) {
 //
 // It exists to close the one origin gap the coinbase tag cannot: blocks carry a
 // mine tag, subtrees carry nothing. A block that arrives on a delivery lane came
-// from the object plane by definition, and it names every subtree it contains —
+// from the object plane by definition, and it names every subtree it contains:
 // so its roots can be marked as foreign the moment the block lands, before the
 // cluster finishes validating it and starts emitting subtree notifications for
 // those same roots. Without this, a cluster that learns a block out of band

@@ -1,12 +1,12 @@
 // Command tnbench drives the teranode-bridge tx lane at saturation.
 //
-//	tnbench mock  -listen 127.0.0.1:20833 [-faithful]  — propagation stand-in
+//	tnbench mock  -listen 127.0.0.1:20833 [-faithful] , propagation stand-in
 //	tnbench feed  -addr 127.0.0.1:28725 -conns 8 -dur 20s
 //
 // # What each mock proves
 //
-// The DEFAULT mock accepts and discards. It bounds the bridge's own ceiling —
-// parse, hash, copy, enqueue, batch, write — and nothing else. A number from it
+// The DEFAULT mock accepts and discards. It bounds the bridge's own ceiling:
+// parse, hash, copy, enqueue, batch, write, and nothing else. A number from it
 // says "the bridge is not the bottleneck"; it says nothing about a cluster.
 //
 // The -faithful mock additionally does what propagation's batch handler does to
@@ -14,15 +14,15 @@
 // the wire uses, computes each txid, and enforces the parent-before-child rule
 // per request, answering 500 with real "[ProcessTransaction][<txid>]" error
 // lines for members whose parent it has not seen. That exercises the bridge's
-// batch accounting, re-attribution and retry ladder under load — the paths a
-// blind sink never reaches — at a cost of roughly one hash per transaction.
+// batch accounting, re-attribution and retry ladder under load, the paths a
+// blind sink never reaches: at a cost of roughly one hash per transaction.
 //
 // Neither mock validates scripts, touches a UTXO store, or writes anything
 // durable, so neither is a substitute for measuring a real cluster. They bound
 // the bridge; the cluster bounds the system.
 //
-// For the rung above these — a REAL propagation service, standalone, with the
-// blockchain service and one Redpanda and nothing else — see hack/propbench.
+// For the rung above these, a REAL propagation service, standalone, with the
+// blockchain service and one Redpanda and nothing else: see hack/propbench.
 // Measured 2026-08-12: 152,666 tx/s at 16 connections, confirmed against the
 // Kafka high-watermark delta, with the profile showing the ceiling inside
 // propagation's own allocator rather than in the bridge.
@@ -87,7 +87,7 @@ func main() {
 					return
 				}
 				// Propagation processes a batch concurrently, so a member whose
-				// parent is in the SAME request loses the race — the caller
+				// parent is in the SAME request loses the race, the caller
 				// contract the bridge's dependency sealing exists to honour.
 				missing := false
 				_ = inputRefs(tx, func(prev [32]byte) {
@@ -132,7 +132,7 @@ func main() {
 		addr := fs.String("addr", "127.0.0.1:28725", "")
 		conns := fs.Int("conns", 8, "")
 		dur := fs.Duration("dur", 20*time.Second, "")
-		chain := fs.Bool("chain", false, "each tx spends the previous one — exercises dependency sealing and the missing-parent retry under load (independent txs otherwise)")
+		chain := fs.Bool("chain", false, "each tx spends the previous one, exercises dependency sealing and the missing-parent retry under load (independent txs otherwise)")
 		_ = fs.Parse(os.Args[2:])
 		var sent atomic.Uint64
 		var wg sync.WaitGroup

@@ -53,7 +53,7 @@ func TestPromoterLifecycle(t *testing.T) {
 	healthy.Store(true)
 	wait("demotion", func() bool { return !s.Active() })
 
-	// Flap: alternate every probe — neither threshold accumulates.
+	// Flap: alternate every probe, neither threshold accumulates.
 	var n atomic.Int64
 	flap := func(context.Context) bool { return n.Add(1)%2 == 0 }
 	cancel()

@@ -5,7 +5,7 @@
 //
 // A Teranode service exposes /health, /health/readiness and /health/liveness,
 // accepts a ?timeout= override, and answers with a JSON body enumerating every
-// dependency it has — each with its own status, message and error — rather than
+// dependency it has (each with its own status, message and error) rather than
 // a bare 200. Liveness deliberately skips dependency probing: it asks only
 // whether this process is alive, so a sick dependency never triggers a restart
 // loop. That distinction is threaded through every check as `checkLiveness`.
@@ -16,7 +16,7 @@
 // literally to the bridge that is actively harmful: the retrieval plane serves
 // objects out of a local cache, so a bridge with unreachable Kafka can still
 // answer every pull for everything it has already announced. Failing readiness
-// would pull it out of the retrieval Service and strand exactly those fetches —
+// would pull it out of the retrieval Service and strand exactly those fetches:
 // turning a degraded announce path into lost objects.
 //
 // So each check declares whether it gates readiness. The aggregate status is
@@ -26,7 +26,7 @@
 //
 // # Why /readyz is not this
 //
-// /readyz keeps its old, narrow meaning — every delivery lane is bound — because
+// /readyz keeps its old, narrow meaning (every delivery lane is bound) because
 // a standby bridge polls the primary's /readyz to decide whether to promote
 // itself (see reverse.RunPromoter). Folding dependency health into that
 // signal would let a Kafka blip promote a standby while the primary is still
@@ -43,7 +43,7 @@ import (
 )
 
 // CheckFunc probes one dependency. It returns an HTTP status, a human-readable
-// message, and an error if the probe itself failed — the same signature
+// message, and an error if the probe itself failed, the same signature
 // Teranode's util/health uses, so a check written for one is portable to the
 // other.
 type CheckFunc func(ctx context.Context, checkLiveness bool) (int, string, error)
@@ -140,7 +140,7 @@ func Handler(base context.Context, liveness, strict bool, checks func() []Check)
 }
 
 // Alive is the liveness answer for the process itself: if this code runs, the
-// process runs. Teranode's liveness has the same shape — it is deliberately not
+// process runs. Teranode's liveness has the same shape: it is deliberately not
 // a proxy for anything downstream.
 func Alive() CheckFunc {
 	return func(context.Context, bool) (int, string, error) {
@@ -219,7 +219,7 @@ func HTTPGet(client *http.Client, bases []string, path string) CheckFunc {
 		case reached > 0:
 			// Degraded but working, so the STATUS is the verdict and the error
 			// is folded into the message. Returning a non-nil error alongside a
-			// 200 would make CheckAll count this as a failure — which under
+			// 200 would make CheckAll count this as a failure, which under
 			// -health-strict would fail readiness for a bridge that is
 			// delivering perfectly well through its remaining endpoints.
 			return http.StatusOK, fmt.Sprintf("%d of %d endpoints answering (%v)",

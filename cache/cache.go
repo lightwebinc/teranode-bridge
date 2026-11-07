@@ -50,8 +50,8 @@ type shard struct {
 // Cache is safe for concurrent use: ingest writes while retrieval reads.
 //
 // Its Get/Put/TTL shape is the seam a sibling module substitutes (see
-// retrieval.Store): anything honouring these semantics — including the
-// copy-on-Put rule — can stand in for the in-process implementation.
+// retrieval.Store): anything honouring these semantics, including the
+// copy-on-Put rule: can stand in for the in-process implementation.
 type Cache struct {
 	s [shards]*shard
 }
@@ -90,12 +90,12 @@ func New(o Options) *Cache {
 func (c *Cache) shardOf(key Key) *shard { return c.s[key[0]&(shards-1)] }
 
 // Put stores body under key. Storing an existing key refreshes it and keeps the
-// original bytes — re-delivery of an object we already hold is a no-op, which is
+// original bytes: re-delivery of an object we already hold is a no-op, which is
 // what makes A/B failover and reconnects harmless.
 //
 // The bytes are COPIED. Callers hand in the slice objfmt.Reader.Next returned,
 // which aliases the reader's buffer and is overwritten by later objects on the
-// same connection — retaining it uncopied corrupts cached entries in place,
+// same connection: retaining it uncopied corrupts cached entries in place,
 // and the retrieval plane would serve those bytes to the cluster.
 func (c *Cache) Put(key Key, class string, body []byte) {
 	s := c.shardOf(key)

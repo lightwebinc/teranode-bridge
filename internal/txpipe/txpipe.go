@@ -1,7 +1,7 @@
 // Package txpipe decouples the tx lane's read loop from cluster submission and
 // turns per-transaction round trips into batched ones.
 //
-// The serial design — Handle blocking the lane on one POST /tx per object —
+// The serial design: Handle blocking the lane on one POST /tx per object:
 // couples throughput to the cluster's latency: 1/RTT per connection, and the
 // RTT grows exactly when load does. Propagation exposes a batch endpoint
 // (POST /txs, ≤1024 txs / ≤32 MiB per request) whose body is the same bare
@@ -27,7 +27,7 @@
 //   - 500 "Failed to process transactions": SOME failed; the others were still
 //     processed. The body carries one error line per failure including the
 //     txid, so failures are re-attributed to batch members and retried as one
-//     further batch — missing-parent resolves once the parent lands, which is
+//     further batch: missing-parent resolves once the parent lands, which is
 //     bounded-retry, not fail-forever.
 //   - 429: the endpoint's rate limiter refused the request before reading it.
 //     No member was processed, but splitting the batch into per-member retries
@@ -99,7 +99,7 @@ type Config struct {
 // `totalNrTransactions >= maxTransactionsPerRequest` (1024) at the TOP of the
 // read loop, so the 1024th transaction is read, dispatched and processed, and
 // only then does the loop re-enter, trip the check and answer 400. A batch of
-// exactly 1024 is therefore fully applied AND reported as failed — the worst
+// exactly 1024 is therefore fully applied AND reported as failed, the worst
 // of both, since every member would be resubmitted as a duplicate. 1023 is the
 // real cap.
 const maxServerBatchTxs = 1023
@@ -107,7 +107,7 @@ const maxServerBatchTxs = 1023
 // rateLimitBackoff is the whole-batch retry ladder for 429. Propagation's HTTP
 // limiter is per source IP AND per endpoint (Server.go: HTTPRateLimit), so a
 // bridge saturating one endpoint is throttled while a sibling endpoint is
-// still free — hence the failover attempt happens first and this ladder only
+// still free: hence the failover attempt happens first and this ladder only
 // covers the case where every endpoint is throttled at once. Var, not const,
 // so tests can shorten it.
 var rateLimitBackoff = []time.Duration{20 * time.Millisecond, 80 * time.Millisecond, 320 * time.Millisecond}
@@ -207,7 +207,7 @@ func New(cfg Config, log *slog.Logger) (*Pipe, error) {
 	tr.MaxIdleConnsPerHost = cfg.Inflight + 8
 	// And a HARD cap on live connections, not just idle ones. Without it a
 	// retry storm opens a socket per rejected transaction and exhausts the
-	// host's ephemeral ports — observed as "connect: cannot assign requested
+	// host's ephemeral ports: observed as "connect: cannot assign requested
 	// address" against a cluster that was answering normally.
 	tr.MaxConnsPerHost = cfg.Inflight + 8
 	tr.IdleConnTimeout = 90 * time.Second
@@ -237,7 +237,7 @@ func New(cfg Config, log *slog.Logger) (*Pipe, error) {
 }
 
 // Enqueue hands one whole transaction to the pipe. The bytes are copied before
-// return; the caller may reuse the slice. Blocks when the queue is full — that
+// return; the caller may reuse the slice. Blocks when the queue is full, that
 // backpressure propagates to the lane's TCP window, which is the design.
 func (p *Pipe) Enqueue(ctx context.Context, raw []byte, id hashid.Hash) error {
 	return p.EnqueueOwned(ctx, append([]byte(nil), raw...), id)
@@ -545,7 +545,7 @@ func (p *Pipe) submit(ctx context.Context, b *batch) {
 	}
 	// Both endpoints refused the whole batch. Every member is known
 	// undelivered, so salvage them as one retry batch rather than writing off n
-	// transactions on one bad request — a batch-shaped fault (an oversized
+	// transactions on one bad request, a batch-shaped fault (an oversized
 	// body, one poisonous member) does not mean the others are unacceptable.
 	if p.cfg.RetryAttempts > 0 {
 		p.log.Warn("txpipe: batch failed on all endpoints; salvaging as one retry batch", "txs", n)
@@ -670,7 +670,7 @@ func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
 //
 // Matching every 64-hex token in the body is wrong, and wrong in the direction
 // that corrupts accounting: propagation's messages quote hashes that are not
-// the subject — "[ProcessTransaction][<txid>] duplicate input found:
+// the subject: "[ProcessTransaction][<txid>] duplicate input found:
 // <prevTxID>:<vout>" carries two. The prevout belongs to a transaction that is
 // almost never a batch member, so every such line would book one phantom
 // unattributed failure and subtract a real acceptance. The subject is the one
@@ -686,8 +686,8 @@ func (p *Pipe) subjectTxID(line string) (string, bool) {
 // retryBatch resubmits everything a batch left undelivered as ONE further
 // batch, under the same inflight semaphore a first submission takes.
 //
-// The shape this replaces — one goroutine and one singleton POST /tx per
-// rejected transaction, outside the semaphore — is what turned a partial
+// The shape this replaces, one goroutine and one singleton POST /tx per
+// rejected transaction, outside the semaphore: is what turned a partial
 // failure into a throughput collapse. Measured against this cluster:
 // single-transaction retries were 98.9% of propagation's requests and 97.7%
 // of its handler seconds, for a 0.074% recovery yield, and being unbounded
@@ -698,7 +698,7 @@ func (p *Pipe) subjectTxID(line string) (string, bool) {
 // Batching a retry is safe against the /txs parent-child contract: this set is
 // a subset of one batch that was already dependency-sealed, so it cannot hold
 // a parent and its child. Missing-parent (422) resolves when the PARENT's
-// batch lands — a different request — which is why waiting and resubmitting
+// batch lands (a different request) which is why waiting and resubmitting
 // works at all, and why it never needed to be one request per transaction.
 func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 	if len(jobs) == 0 {

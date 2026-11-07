@@ -14,8 +14,8 @@ import (
 // TestGatherWithSourcesAttached pins that a scrape taken while the tx path is
 // live returns every family that path owns.
 //
-// The families only materialise once a source is attached — a bridge with no
-// tx lane scrapes clean whatever happens here — so this is the only place a
+// The families only materialise once a source is attached, a bridge with no
+// tx lane scrapes clean whatever happens here, so this is the only place a
 // missing or misspelled tx metric surfaces before an operator finds an empty
 // panel.
 func TestGatherWithSourcesAttached(t *testing.T) {
@@ -75,7 +75,7 @@ func TestGatherWithSourcesAttached(t *testing.T) {
 	}
 }
 
-// TestLegacyPrefixOff pins that turning the alias off removes it entirely —
+// TestLegacyPrefixOff pins that turning the alias off removes it entirely:
 // the switch has to actually complete the migration, not just reorder output.
 func TestLegacyPrefixOff(t *testing.T) {
 	r := New(Options{Version: "test", Instance: "unit", LegacyPrefix: false})
@@ -102,8 +102,8 @@ func TestLegacyPrefixOff(t *testing.T) {
 // TestDescribeCoversCollect pins that Describe announces every descriptor
 // Collect can emit.
 //
-// The registry tolerates the mismatch today — the gather above passes with
-// descriptors missing — so this guards the contract rather than a live
+// The registry tolerates the mismatch today, the gather above passes with
+// descriptors missing, so this guards the contract rather than a live
 // outage: Describe is what lets the registry detect a name or label collision
 // at REGISTRATION time instead of at scrape time, and a descriptor it never
 // heard about is exempt from that check. Every tx-pipe metric was undescribed

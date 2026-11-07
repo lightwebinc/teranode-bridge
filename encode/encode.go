@@ -34,7 +34,7 @@ var CoinbasePlaceholder = [32]byte{
 //	root[32] | NodeCount u64 BE | NodeCount × hash[32]
 //
 // root and nodes are in internal (wire) byte order. The root must be the merkle
-// root the node list reproduces — the receiving cluster rebuilds the tree and
+// root the node list reproduces, the receiving cluster rebuilds the tree and
 // rejects a mismatch.
 func Subtree(root [32]byte, nodes [][32]byte) ([]byte, error) {
 	if len(nodes) == 0 {
@@ -76,7 +76,7 @@ func (b Block) Encode() ([]byte, error) {
 		return nil, errors.New("encode: block without an in-band coinbase")
 	}
 	// The coinbase is delimited by walking its transaction structure, so it must
-	// parse exactly — a trailing byte would swallow the height field.
+	// parse exactly, a trailing byte would swallow the height field.
 	if n, err := objfmt.TxSize(b.Coinbase); err != nil || n != len(b.Coinbase) {
 		return nil, fmt.Errorf("encode: coinbase is not one whole transaction (size=%d err=%v len=%d)", n, err, len(b.Coinbase))
 	}

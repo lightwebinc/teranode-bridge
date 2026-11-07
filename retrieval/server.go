@@ -38,7 +38,7 @@ import (
 
 // Store is the read side of the object cache the ingest plane fills.
 //
-// Extension seam: an importing module substitutes any backend here — the OSS
+// Extension seam: an importing module substitutes any backend here, the OSS
 // bridge wires the in-process cache.Cache; a sibling may plug a replicating or
 // shared store without touching the plane. Implementations must keep the
 // 404-never-200-empty contract the server enforces.
@@ -59,7 +59,7 @@ type Config struct {
 	Listen string
 	// APIPrefix must match what is announced. Teranode concatenates the
 	// announced base URL with "/subtree/{hash}" verbatim, and its own asset
-	// mounts everything under /api/v1 — so the announced URL carries the prefix
+	// mounts everything under /api/v1, so the announced URL carries the prefix
 	// and we must answer on it.
 	APIPrefix string
 }
@@ -125,7 +125,7 @@ func (s *Server) Handler() http.Handler {
 	// costs nothing and avoids a failure that would look like a missing object.
 	mux.HandleFunc("GET "+p+p+"/subtree_data/{hash}", s.timed("subtree_data", true, s.getSubtreeData))
 
-	// Everything else — /blocks, /headers_from_common_ancestor, /tx — is a
+	// Everything else (/blocks, /headers_from_common_ancestor, /tx) is a
 	// catchup or convenience route the bridge has no data for. 404 is the honest
 	// answer and keeps us out of the cluster's malicious-peer classification.
 	mux.HandleFunc("/", s.timed("unserved", false, s.notFound))
@@ -144,7 +144,7 @@ func (s *Server) Handler() http.Handler {
 // timed wraps a handler with the route-latency histogram and, for the routes
 // this bridge actually serves, the pull-freshness stamp. The duration is
 // measured to the point the handler returns, which for the streaming routes is
-// after the body has been written — that is the number the cluster waits on.
+// after the body has been written, that is the number the cluster waits on.
 //
 // `served` is false on the catch-all. A chain-sync probe the bridge answers 404
 // is still worth timing, but it must NOT stamp last-pull: that gauge means "the
@@ -273,7 +273,7 @@ func (s *Server) getSubtreeData(w http.ResponseWriter, r *http.Request) {
 
 // postSubtreeTxs answers the batch route: the body is raw 32-byte txids with no
 // count or delimiter, and the response is the matching transactions
-// concatenated. The cluster re-keys them by txid, so order does not matter — but
+// concatenated. The cluster re-keys them by txid, so order does not matter, but
 // the count must match exactly, so a single missing member means 404.
 func (s *Server) postSubtreeTxs(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<20))
@@ -404,7 +404,7 @@ type Stats struct {
 	Subtree, SubtreeData, Txs, Block, Miss, Errors uint64
 	// UnservedRoute counts requests for routes the bridge does not serve at
 	// all (vs Miss, which counts known routes for objects it lacks).
-	// UnservedChainSync is the subset that asked for chain-sync routes — the
+	// UnservedChainSync is the subset that asked for chain-sync routes, the
 	// canary for the catchup-divert regressing.
 	UnservedRoute, UnservedChainSync uint64
 }

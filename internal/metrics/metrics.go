@@ -10,16 +10,16 @@
 // first: one source of truth, no risk of the two drifting, and no metrics
 // dependency pushed down into the hot paths.
 //
-// That shape cannot express a distribution — a histogram has to be observed
-// where the work happens — so latency, size and freshness instrumentation lives
+// That shape cannot express a distribution, a histogram has to be observed
+// where the work happens, so latency, size and freshness instrumentation lives
 // in internal/obs and is registered here alongside the collector.
 //
 // # Deliberate deviation: no OTel SDK for counters
 //
 // The rest of the stack routes cold-path counters through the OTel SDK for
 // optional OTLP push. This binary registers directly on the Prometheus registry
-// instead, for two reasons. The bridge has no per-packet path — it counts whole
-// objects, so the SDK's cost was never the deciding factor — and a directly
+// instead, for two reasons. The bridge has no per-packet path: it counts whole
+// objects, so the SDK's cost was never the deciding factor, and a directly
 // registered counter is **present at zero**, while an OTel counter is absent
 // from /metrics until its first increment. Presence at zero is what lets
 // `teranode_bridge_echo_mismatch_total == 0` be a meaningful alert expression
@@ -155,8 +155,8 @@ func New(opts Options) *Recorder {
 func (r *Recorder) SetSources(src Sources) { r.src.Store(&src) }
 
 // SetChecks attaches the health dependency list. It is a snapshot swap rather
-// than a fixed slice because the reverse path — and therefore the cluster
-// dependencies — is constructed after the endpoint is already serving.
+// than a fixed slice because the reverse path, and therefore the cluster
+// dependencies: is constructed after the endpoint is already serving.
 func (r *Recorder) SetChecks(checks []health.Check) { r.checks.Store(&checks) }
 
 // EchoVerified records an object that came back byte-identical.
@@ -256,7 +256,7 @@ func (r *Recorder) Serve(ctx context.Context, addr string) error {
 	}
 	// pprof rides the metrics listener: same trust boundary, and profiling a
 	// throughput problem without a rebuild is worth the routes. The set matches
-	// Teranode's profiler mux (teranode/daemon/daemon_services.go) — Index
+	// Teranode's profiler mux (teranode/daemon/daemon_services.go): Index
 	// dispatches the named runtime profiles (heap, goroutine, block, mutex),
 	// while cmdline, profile, symbol and trace are separate handlers. Omitting
 	// symbol breaks `go tool pprof` symbolization against this endpoint.

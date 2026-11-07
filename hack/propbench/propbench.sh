@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# propbench — propagation-only Teranode rig (no compose plugin required).
+# propbench: propagation-only Teranode rig (no compose plugin required).
 #
 #   ./propbench.sh up            # redpanda + blockchain + propagation
 #   ./propbench.sh count         # txs propagation has accepted (kafka watermarks)
@@ -12,7 +12,7 @@
 #
 # What that number IS: the ingest edge with a null tx store and no validation.
 # It is an UPPER BOUND on what any real cluster can absorb, never a cluster
-# throughput claim — everything expensive (validator, UTXO store, block
+# throughput claim: everything expensive (validator, UTXO store, block
 # assembly) sits on the far side of the validatortxs topic this rig terminates.
 # A 15s CPU profile at 32 conns is 29% runtime.(*lfstack).pop + 6% push, i.e.
 # the ceiling here is Go allocator/GC contention inside propagation, not the

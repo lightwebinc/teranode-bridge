@@ -187,7 +187,7 @@ func deadAddr(t *testing.T) string {
 
 // A dead first address must not strand submits: the dialer advances to the next
 // address inside the same Send. This is the customer-side half of "submit
-// inherits STE mobility" — after an A→B flip the side-A inner refuses, and a
+// inherits STE mobility": after an A→B flip the side-A inner refuses, and a
 // single-address submitter would redial it forever.
 func TestSendFailsOverOnDialFailure(t *testing.T) {
 	s := newSink(t)
@@ -203,7 +203,7 @@ func TestSendFailsOverOnDialFailure(t *testing.T) {
 }
 
 // Once an address works the dialer is STICKY: later Sends must not probe the
-// dead address again — a submitter flapping between sides on every object would
+// dead address again, a submitter flapping between sides on every object would
 // double-submit whenever both are healthy.
 func TestSendSticksToTheWorkingAddress(t *testing.T) {
 	s := newSink(t)

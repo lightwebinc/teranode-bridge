@@ -179,7 +179,7 @@ func TestHandlerErrorKeepsConnection(t *testing.T) {
 
 // TestRejectIsNotAnError pins the admission refusal: an object the handler
 // refuses on format policy counts as Rejected, not Errors, and the stream
-// carries on — framing was never in doubt.
+// carries on: framing was never in doubt.
 func TestRejectIsNotAnError(t *testing.T) {
 	var c captured
 	l, addr, _ := startLane(t, func(_ context.Context, obj []byte) error {

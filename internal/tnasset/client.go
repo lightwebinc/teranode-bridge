@@ -3,8 +3,8 @@
 //
 // It is the mirror of the retrieval plane: there the bridge answers the
 // cluster's pulls, here it makes them. The endpoints and formats are the same
-// ones — a subtree is its bare node hashes, a block is Teranode's block
-// serialization — which is why a cluster-produced object re-encodes into a push
+// ones, a subtree is its bare node hashes, a block is Teranode's block
+// serialization, which is why a cluster-produced object re-encodes into a push
 // frame byte-identical to one that arrived from the fabric.
 package tnasset
 
@@ -46,7 +46,7 @@ func New(base string, timeout time.Duration) *Client {
 // BuildSubtree fetches a subtree's node hashes and encodes the BRC-143 frame.
 //
 // The announced hash IS the merkle root, so the frame's root field and the
-// identity the cluster gave us are the same value — no recomputation, and no
+// identity the cluster gave us are the same value, no recomputation, and no
 // chance of publishing a root that disagrees with the node list.
 func (c *Client) BuildSubtree(ctx context.Context, hash hashid.Hash) ([]byte, bool, error) {
 	defer obs.Timer(obs.AssetFetchDuration, "subtree")()
@@ -111,7 +111,7 @@ func (c *Client) BuildBlock(ctx context.Context, hash hashid.Hash) ([]byte, bool
 //
 // The limiter trips readily: a burst of mined blocks produces a burst of
 // notifications, and each one makes us fetch. Without this, a catch-up or a
-// fast-mining window silently drops objects from the fabric — they are never
+// fast-mining window silently drops objects from the fabric: they are never
 // published, and nothing downstream can tell the difference between "the miner
 // produced nothing" and "we were throttled".
 var rateLimitBackoff = []time.Duration{200 * time.Millisecond, time.Second, 3 * time.Second, 8 * time.Second}

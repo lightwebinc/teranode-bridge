@@ -15,7 +15,7 @@ import (
 // Every lane handler passes the slice returned by objfmt.Reader.Next straight
 // into Put, and that slice is documented to alias the reader's buffer, valid
 // only until the following Next call. If Put retains it without copying, later
-// objects on the same connection compact over the cached bytes — corrupting
+// objects on the same connection compact over the cached bytes: corrupting
 // entries the retrieval plane will serve to the cluster.
 func TestPutCopies(t *testing.T) {
 	c := New(Options{})

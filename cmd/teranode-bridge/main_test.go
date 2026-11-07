@@ -133,8 +133,8 @@ func TestAnnounceFlagsRequirePeerID(t *testing.T) {
 // --- announce gate -----------------------------------------------------------
 //
 // The gate is the one thing `seen` must NOT decide on its own. `seen` records
-// that a hash crossed the bridge — the reverse path's origin filter and the
-// echo detector both read it — while `announced` records that the cluster was
+// that a hash crossed the bridge, the reverse path's origin filter and the
+// echo detector both read it, while `announced` records that the cluster was
 // actually told. These tests pin all four rules, on both lanes: a first
 // delivery announces, a redelivery after success does not, an object we
 // ourselves submitted is never announced back at the cluster, and a redelivery
@@ -319,7 +319,7 @@ func TestAnnounceGate(t *testing.T) {
 // TestAnnounceGateSuppressesOwnEcho pins the echo rule. Own-traffic exclusion
 // does not cover the subtree and block classes, so everything this cluster
 // pushes up comes back down the delivery lanes. The cluster produced it; it
-// must never be announced back at the cluster as new — and unlike a failed
+// must never be announced back at the cluster as new, and unlike a failed
 // announce, no redelivery changes that.
 func TestAnnounceGateSuppressesOwnEcho(t *testing.T) {
 	for _, lc := range laneCases() {
@@ -356,7 +356,7 @@ func TestAnnounceGateSuppressesOwnEcho(t *testing.T) {
 // handle() treats any hash NOT in `seen` as locally originated and publishes it
 // UP the tunnel; a fabric-delivered object that slipped out of `seen` would be
 // republished into the fabric as ours. So every delivery must register, whatever
-// the announce did — including the delivery whose announce failed, which is the
+// the announce did, including the delivery whose announce failed, which is the
 // one the new gate lets through a second time.
 func TestDeliveryAlwaysRegistersSeen(t *testing.T) {
 	cases := []struct {
@@ -396,8 +396,8 @@ func TestDeliveryAlwaysRegistersSeen(t *testing.T) {
 // decision on the block pre-mark. handleBlock registers every subtree root the
 // block names, so the reverse path cannot mistake another cluster's subtrees
 // for this cluster's when gossip beats the fabric. That pre-mark ALSO suppresses
-// the announce if the subtree then arrives on the subtree lane — the cluster
-// learns of those subtrees from the block and fetches them while validating it —
+// the announce if the subtree then arrives on the subtree lane, the cluster
+// learns of those subtrees from the block and fetches them while validating it:
 // and splitting the registries must not change that, whether the block's own
 // announce succeeded or failed.
 func TestBlockContainedSubtreeIsNotAnnouncedOnItsOwnLane(t *testing.T) {

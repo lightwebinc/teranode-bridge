@@ -33,7 +33,7 @@ type Handler func(ctx context.Context, obj []byte) error
 // ErrReject marks a handler error as an admission refusal rather than a
 // failure: the object was well-framed but does not satisfy the lane's format
 // policy, so it is discarded on purpose. Framing is intact, so the connection
-// stays and the counter is separate from Errors — a refused object is the
+// stays and the counter is separate from Errors, a refused object is the
 // sender's bug, an error is ours or the cluster's.
 var ErrReject = errors.New("rejected")
 
@@ -379,7 +379,7 @@ func (l *Lane) serveConn(ctx context.Context, conn net.Conn) {
 				// shutting down
 
 			case errors.Is(err, io.ErrUnexpectedEOF) && onConn == 0:
-				// Opened and closed without sending a whole object — a health
+				// Opened and closed without sending a whole object, a health
 				// probe or a pool rotation, not a protocol fault.
 				l.Log.Info("lane connection closed before any object",
 					"lane", l.Name, "remote", remote)
@@ -391,8 +391,8 @@ func (l *Lane) serveConn(ctx context.Context, conn net.Conn) {
 					"lane", l.Name, "remote", remote, "objects", onConn, "err", err)
 
 			default:
-				// A real codec fault. The stream is bare — no length prefix, no
-				// sync marker — so there is no resync point: every following byte
+				// A real codec fault. The stream is bare, no length prefix, no
+				// sync marker, so there is no resync point: every following byte
 				// is suspect and the connection must go.
 				l.counts.Dropped.Add(1)
 				l.Log.Error("lane framing error, dropping connection",
@@ -404,7 +404,7 @@ func (l *Lane) serveConn(ctx context.Context, conn net.Conn) {
 			// The reader's bound only fires while ACCUMULATING an object;
 			// one that arrives whole in a single read sails past it. The
 			// ceiling is a policy, not a buffering detail, so enforce it on
-			// delivery too — and as with any framing fault there is no
+			// delivery too, and as with any framing fault there is no
 			// resync point, so the connection goes.
 			l.counts.Dropped.Add(1)
 			l.Log.Error("lane object exceeds ceiling, dropping connection",
