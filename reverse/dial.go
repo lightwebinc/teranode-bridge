@@ -1,15 +1,18 @@
 package reverse
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"os"
 	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/metadata"
 )
 
 /*
@@ -181,4 +184,23 @@ func keepaliveParams(every, timeout time.Duration, permitWithoutStream bool) (ke
 		Timeout:             timeout,
 		PermitWithoutStream: permitWithoutStream,
 	}, clamped
+}
+
+// apiKeyHeader is the metadata key Teranode's gRPC servers read the admin key
+// from (util.requiredAuthInterceptors, Teranode v0.16.1).
+const apiKeyHeader = "x-api-key"
+
+// apiKeyUnary attaches the cluster's grpc_admin_api_key to every unary call.
+func apiKeyUnary(key string) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		return invoker(metadata.AppendToOutgoingContext(ctx, apiKeyHeader, key), method, req, reply, cc, opts...)
+	}
+}
+
+// apiKeyStream attaches the cluster's grpc_admin_api_key to every stream, the
+// Subscribe stream among them.
+func apiKeyStream(key string) grpc.StreamClientInterceptor {
+	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		return streamer(metadata.AppendToOutgoingContext(ctx, apiKeyHeader, key), desc, cc, method, opts...)
+	}
 }
