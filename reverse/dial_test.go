@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/metadata"
 
 	pb "github.com/lightwebinc/teranode-bridge/proto/blockchain_api"
 	"github.com/lightwebinc/teranode-bridge/registry"
@@ -379,5 +380,72 @@ func TestWithoutKeepaliveTheBridgeWedges(t *testing.T) {
 	if waitReconnect(sub, 15*time.Second) {
 		t.Fatal("reconnected without keepalive; the control assumption is wrong " +
 			"and the detection test above proves nothing")
+	}
+}
+
+// TestAPIKeyRidesEveryBlockchainCall pins the Teranode v0.16.1 contract: the
+// blockchain service refuses every method but Health without its
+// grpc_admin_api_key as x-api-key metadata, the Subscribe stream included. A
+// key in Config reaches the server on unary and streaming calls; no key sends
+// no metadata, which an older cluster expects.
+func TestAPIKeyRidesEveryBlockchainCall(t *testing.T) {
+	const key = "lab-admin-key-0123456789abcdef"
+	for _, tc := range []struct {
+		name, key string
+	}{{"with key", key}, {"without key", ""}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var unarySeen, streamSeen atomic.Value
+			unarySeen.Store([]string(nil))
+			streamSeen.Store([]string(nil))
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			g := grpc.NewServer(
+				grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+					md, _ := metadata.FromIncomingContext(ctx)
+					unarySeen.Store(md.Get("x-api-key"))
+					return h(ctx, req)
+				}),
+				grpc.StreamInterceptor(func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, h grpc.StreamHandler) error {
+					md, _ := metadata.FromIncomingContext(ss.Context())
+					streamSeen.Store(md.Get("x-api-key"))
+					return h(srv, ss)
+				}),
+			)
+			srv := &silentServer{opened: make(chan struct{}, 1), stop: make(chan struct{})}
+			pb.RegisterBlockchainAPIServer(g, srv)
+			go func() { _ = g.Serve(ln) }()
+			defer func() { close(srv.stop); g.Stop() }()
+
+			sub, err := New(Config{BlockchainAddr: ln.Addr().String(), APIKey: tc.key}, registry.New(time.Minute, 16), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			defer func() { _ = sub.Close() }()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cl := pb.NewBlockchainAPIClient(sub.conn)
+			_, _ = cl.GetFSMCurrentState(ctx, &pb.Empty{})
+			stream, err := cl.Subscribe(ctx, &pb.SubscribeRequest{Source: "test"})
+			if err != nil {
+				t.Fatalf("Subscribe: %v", err)
+			}
+			select {
+			case <-srv.opened:
+			case <-ctx.Done():
+				t.Fatal("the Subscribe stream never reached the server")
+			}
+			_ = stream
+			want := []string(nil)
+			if tc.key != "" {
+				want = []string{tc.key}
+			}
+			for name, got := range map[string][]string{"unary": unarySeen.Load().([]string), "stream": streamSeen.Load().([]string)} {
+				if strings.Join(got, ",") != strings.Join(want, ",") || len(got) != len(want) {
+					t.Fatalf("%s call carried x-api-key %q, want %q", name, got, want)
+				}
+			}
+		})
 	}
 }

@@ -102,6 +102,7 @@ func main() {
 
 		bcSecurity = flag.Int("blockchain-security-level", 0, "transport security for the blockchain gRPC connection, mirroring Teranode's security_level_grpc: 0 plaintext (upstream default), 1 TLS WITHOUT verifying the server (upstream calls this MITM-exploitable by design), 2/3 TLS presenting a client certificate and verifying the server against a CA. security_level_grpc is GLOBAL cluster-side, so a cluster running any non-zero level cannot be reached by a plaintext dial at all; and only the reverse path fails, which reads as an endless subscribe retry while delivery keeps working")
 		bcCACert   = flag.String("blockchain-ca-cert", "", "CA certificate that signs the cluster's gRPC server cert (levels 2-3)")
+		bcKeyFile  = flag.String("blockchain-api-key-file", "", "file holding the cluster's grpc_admin_api_key, sent as x-api-key on every blockchain gRPC call. Teranode v0.16.1 and later refuse every blockchain method but Health without it (Unauthenticated, which reads as an endless subscribe retry while delivery keeps working). Read once at start, surrounding whitespace trimmed; a file that holds nothing is refused at startup. Unset sends no key, for older clusters")
 		bcCert     = flag.String("blockchain-cert", "", "client certificate presented to the cluster (levels 2-3)")
 		bcKey      = flag.String("blockchain-key", "", "private key for -blockchain-cert (levels 2-3)")
 
@@ -354,6 +355,18 @@ func main() {
 		if !*submitter {
 			log.Info("starting as standby: reverse path subscribed but not publishing")
 		}
+		var bcAPIKey string
+		if *bcKeyFile != "" {
+			kb, kerr := os.ReadFile(*bcKeyFile)
+			if kerr != nil {
+				log.Error("blockchain api key", "err", kerr)
+				os.Exit(2)
+			}
+			if bcAPIKey = strings.TrimSpace(string(kb)); bcAPIKey == "" {
+				log.Error("blockchain api key file is empty", "file", *bcKeyFile)
+				os.Exit(2)
+			}
+		}
 		asset := tnasset.New(*localAsset, 30*time.Second)
 		rev, err = reverse.New(reverse.Config{
 			BlockchainAddr: *blockchain,
@@ -374,6 +387,7 @@ func main() {
 			KeepaliveTime:       *bcKeepalive,
 			KeepaliveTimeout:    *bcKeepaliveTimeout,
 			PermitWithoutStream: *bcPingIdle,
+			APIKey:              bcAPIKey,
 		}, seen, builderFunc{asset}, log)
 		if err != nil {
 			log.Error("reverse path", "err", err)
@@ -382,7 +396,7 @@ func main() {
 		defer func() { _ = rev.Close() }()
 		log.Info("reverse path enabled", "blockchain", *blockchain, "asset", *localAsset,
 			"edge_ingress", *edgeIngress, "submitter", *submitter,
-			"security_level", *bcSecurity, "keepalive", *bcKeepalive)
+			"security_level", *bcSecurity, "keepalive", *bcKeepalive, "api_key", bcAPIKey != "")
 		if *bcSecurity == 1 {
 			log.Warn("blockchain security level 1 encrypts the channel but does NOT verify the cluster's certificate; use 2 or 3 where a CA is available")
 		}

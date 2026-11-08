@@ -128,6 +128,12 @@ type Config struct {
 	// PermitWithoutStream allows pings while no stream is open, matching
 	// upstream's grpc_permit_without_stream default.
 	PermitWithoutStream bool
+
+	// APIKey is the cluster's grpc_admin_api_key, sent as x-api-key metadata
+	// on every call. Teranode v0.16.1 and later require it on every blockchain
+	// gRPC method but Health, from external clients as from its own services.
+	// Empty sends no key, which an older cluster expects.
+	APIKey string
 }
 
 // Subscriber watches the cluster and republishes what it produces.
@@ -162,9 +168,11 @@ func (s *Subscriber) Active() bool { return s.active.Load() }
 
 // New dials the blockchain service.
 //
-// Transport security follows Teranode's own security_level_grpc; the blockchain
-// service registers no API-key interceptor (util.StartGRPCServer is called with
-// nil auth options), so no credential beyond TLS is required.
+// Transport security follows Teranode's own security_level_grpc. From Teranode
+// v0.16.1 the blockchain service also requires its grpc_admin_api_key on every
+// method but Health (util.requiredAuthInterceptors); Config.APIKey carries it.
+// Without it the Subscribe stream is refused Unauthenticated and the reverse
+// path retries forever while delivery keeps working.
 func New(cfg Config, seen *registry.Registry, build Builder, log *slog.Logger) (*Subscriber, error) {
 	if cfg.BlockchainAddr == "" {
 		return nil, errors.New("reverse: no blockchain address configured")
@@ -200,6 +208,16 @@ func New(cfg Config, seen *registry.Registry, build Builder, log *slog.Logger) (
 		opts = append(opts,
 			grpc.WithChainUnaryInterceptor(cfg.GRPCMetrics.UnaryClientInterceptor()),
 			grpc.WithChainStreamInterceptor(cfg.GRPCMetrics.StreamClientInterceptor()),
+		)
+	}
+	if cfg.APIKey != "" {
+		if cfg.TLS.SecurityLevel < 2 {
+			log.Warn("the blockchain API key travels without a verified server: level 0 sends it in plaintext and level 1 to an unverified certificate; keep the path on a trusted network or use security level 2 or 3",
+				"security_level", cfg.TLS.SecurityLevel)
+		}
+		opts = append(opts,
+			grpc.WithChainUnaryInterceptor(apiKeyUnary(cfg.APIKey)),
+			grpc.WithChainStreamInterceptor(apiKeyStream(cfg.APIKey)),
 		)
 	}
 	conn, err := grpc.NewClient(cfg.BlockchainAddr, opts...)
