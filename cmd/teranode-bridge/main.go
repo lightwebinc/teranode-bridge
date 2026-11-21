@@ -142,7 +142,7 @@ func main() {
 		traceCollector = flag.String("tracing-collector-url", "http://localhost:4318", "OTLP HTTP collector, matching Teranode's tracing_collector_url")
 		traceSample    = flag.Float64("tracing-sample-rate", 0.01, "head sampling ratio for root spans, matching Teranode's tracing_SampleRate. Child spans inherit the parent decision (ParentBased), so a sampled cluster trace stays sampled across the bridge")
 		logLevel       = flag.String("log-level", "info", "debug|info|warn|error")
-		logFormat      = flag.String("log-format", "text", "log encoding: text (stderr) or json (stdout, the fleet aggregation contract)")
+		logFormat      = flag.String("log-format", "text", "log encoding: text (stderr) or json (stdout, one object per line for a log collector)")
 		debug          = flag.Bool("debug", false, "deprecated alias for -log-level=debug")
 		instanceID     = flag.String("instance-id", "", "service.instance.id for logs and metrics (default: hostname)")
 	)

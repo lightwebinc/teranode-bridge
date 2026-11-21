@@ -300,7 +300,7 @@ invisible.
 | `-drain-timeout` | `5s`      | `5s` | On `SIGTERM`, how long each lane connection keeps reading after sending FIN, so nothing the edge already sent is lost. `0` closes at once. See [systemd unit](#systemd-unit) for lossless restarts. |
 | `-metrics-addr` | `[::]:9146` | `[::]:9146` | HTTP listener for `/metrics`, `/health*`, `/healthz`, `/readyz`, `/loglevel`, `/debug/pprof`. Empty disables it. |
 | `-log-level`    | `info`      | `info` | `debug` \| `info` \| `warn` \| `error`. Runtime-changeable via `POST /loglevel` and `SIGHUP`.            |
-| `-log-format`   | `text`      | `json` | `text` (stderr) or `json` (stdout, the fleet aggregation contract).                                     |
+| `-log-format`   | `text`      | `json` | `text` (stderr) or `json` (stdout, one object per line for a log collector).                            |
 | `-instance-id`  | hostname    | `bridge-a` | `service.instance.id` shared by logs, metrics and traces, so all three join.                             |
 | `-debug`        | `false`     | `true` | Deprecated alias for `-log-level=debug`.                                                                 |
 
