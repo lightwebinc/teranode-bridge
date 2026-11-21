@@ -79,7 +79,7 @@ deadline, as Teranode's do.
 
 | Metric Name | Type | Description |
 |-------------|------|-------------|
-| `teranode_bridge_submit_total` | Counter | Transactions handed to propagation, by `outcome` (`accepted`, `rejected`, `failed`). |
+| `teranode_bridge_submit_total` | Counter | Transactions handed to propagation, by `outcome`. `accepted`: taken, or already known. `rejected`: a verdict, an error line naming the transaction with a final failure (invalid, conflicting, a double spend); never retried. `failed`: no verdict; the endpoint errored, could not be reached, answered with no per-transaction report or kept rate-limiting, or the transaction was still waiting (on a parent, on block assembly) when the retries ran out. A failed transaction may be perfectly valid. |
 | `teranode_bridge_submit_duration_seconds` | Histogram | One `POST /txs` round trip, by `outcome` (`ok`, `rejected`, `failed`, `rate_limited`). Buckets: `MetricsBucketsMilliSeconds`. Separating outcomes is what distinguishes an endpoint that is slow from one refusing quickly. |
 | `teranode_bridge_txpipe_enqueued_total` | Counter | Transactions accepted into the pipe. |
 | `teranode_bridge_txpipe_batches_total` | Counter | Batch submissions shipped. |

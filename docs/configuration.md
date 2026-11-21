@@ -199,7 +199,7 @@ read and admission work across cores.
 | `-tx-inflight`    | `4`       | `4` | Concurrent batch requests. Throughput ≈ inflight × batch / RTT.                    |
 | `-tx-builders`    | `4`       | `4` | Parallel batch builders (power of two, ≤16); lane runs go to builders round robin. |
 | `-tx-queue`       | `8192`    | `65536` | Transactions the pipe holds before backpressure blocks the lane read (`0` = 8192). This is what absorbs the cluster's stall at a block boundary: size it to stall-seconds × rate. Memory is roughly that many transactions. |
-| `-tx-retries`     | `6`       | `6` | Per-tx retries for failures that resolve with time (missing parent, `THRESHOLD_EXCEEDED`), on a 25 ms, 100 ms, 400 ms, 1.6 s, 3.2 s ladder (6 retries is about 8.5 s). `0` disables. |
+| `-tx-retries`     | `6`       | `6` | Per-tx retries for failures that resolve with time (missing parent, `THRESHOLD_EXCEEDED`), on a 25 ms, 100 ms, 400 ms, 1.6 s, 3.2 s ladder (6 retries is about 8.5 s). A transaction still waiting after the last retry is counted `failed`, not `rejected`. `0` disables. |
 
 Three contract details worth knowing:
 
@@ -717,8 +717,8 @@ anomaly points at:
 | `registry stats`  | `duplicates`       | small            | Re-delivery of an object already handed over, expected after a failover or reconnect; sustained growth means the delivery side is re-sending |
 |                   | `announced`        | tracks subtrees + blocks | Objects the cluster has been told about. Well below the subtree+block count delivered in the last 30 min means announces are failing and being retried on redelivery; read it with `announce stats failures` |
 | `submit stats`    | `accepted`         | rising           | (none)                                                                                                                                |
-|                   | `rejected`         | `0`              | The cluster refuses these on merits: invalid, frozen, or a parent still missing after the retry ladder. Not retryable                                              |
-|                   | `failed`           | `0`              | Propagation unreachable or erroring                                                                                                |
+|                   | `rejected`         | `0`              | The cluster refused these on merits, each by name: invalid, conflicting, a double spend, a frozen input. Not retryable           |
+|                   | `failed`           | `0`              | No verdict: propagation unreachable or erroring, still rate-limiting after the backoff, or a transaction still waiting on its parent or on block assembly when the retry ladder ran out. Not a judgment on the transactions |
 | `announce stats`  | `failures`         | `0`              | Kafka unreachable, topic missing, or a mis-advertised broker listener. The objects stay cached and unrecorded, so each is re-announced on its next redelivery |
 |                   | `buffered`         | `0`              | Records the Kafka client still holds unproduced. A sustained non-zero level is a **backlog**, not a failure: the cluster has not been told about those objects yet, and no failure counter reports it |
 |                   | `awaiting_pull`    | small            | Announcements acked but not yet pulled. Climbing means announcements land and pulls do not follow                                  |

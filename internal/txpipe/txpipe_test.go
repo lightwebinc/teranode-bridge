@@ -491,8 +491,8 @@ func TestRateLimitRetriesWholeBatch(t *testing.T) {
 
 // TestLateParentStillRecovers pins the retry ladder's reach: a child whose
 // parent only lands ~2s later (422 until then) must still be accepted. The old
-// 25/100/400ms ladder gave up after ~0.5s and booked it rejected, which lost 76
-// transactions in one burst on a 500 tx/s soak.
+// 25/100/400ms ladder gave up after ~0.5s, which lost 76 transactions in one
+// burst on a 500 tx/s soak.
 func TestLateParentStillRecovers(t *testing.T) {
 	start := time.Now()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -522,9 +522,129 @@ func TestLateParentStillRecovers(t *testing.T) {
 	if err := p.Enqueue(ctx, tx, txidOf(t, tx)); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { s := p.Stats(); return s.Accepted == 1 || s.Rejected > 0 })
-	if s := p.Stats(); s.Accepted != 1 || s.Rejected != 0 {
-		t.Fatalf("accepted=%d rejected=%d, want 1/0: the ladder must outlast a 2s-late parent", s.Accepted, s.Rejected)
+	waitFor(t, func() bool { s := p.Stats(); return s.Accepted == 1 || s.Rejected > 0 || s.Failed > 0 })
+	if s := p.Stats(); s.Accepted != 1 || s.Rejected != 0 || s.Failed != 0 {
+		t.Fatalf("accepted=%d rejected=%d failed=%d, want 1/0/0: the ladder must outlast a 2s-late parent", s.Accepted, s.Rejected, s.Failed)
+	}
+}
+
+// TestNoVerdictIsNeverRejected pins the booking rule: rejected is the
+// cluster's verdict on a transaction, an error line naming it with a final
+// failure, and everything that ends without one is failed. That covers a
+// member still waiting on its parent when the ladder runs out, an endpoint
+// that faults, rate-limits or cannot be reached through the ladder, a salvage
+// batch refused whole, and a waiting member when retries are off. A verdict
+// given on a retry is still a rejection.
+func TestNoVerdictIsNeverRejected(t *testing.T) {
+	a, b, c := rawTx([32]byte{71}, 71), rawTx([32]byte{72}, 72), rawTx([32]byte{73}, 73)
+	bID, cID := txidOf(t, b).Display(), txidOf(t, c).Display()
+	orphan := func(id string) string {
+		return fmt.Sprintf("TX_MISSING_PARENT (34): [ProcessTransaction][%s] missing parent tx\n", id)
+	}
+	invalid := func(id string) string {
+		return fmt.Sprintf("TX_INVALID (69): [ProcessTransaction][%s] script failed\n", id)
+	}
+	// reply is the answer to the n-th /txs request (from 1). named maps a
+	// txid to its error line, written only when that txid is in the request,
+	// as propagation does; nil is a bare answer with no per-member report.
+	type reply struct {
+		code  int
+		named map[string]string
+	}
+	for _, tc := range []struct {
+		name                       string
+		retries                    int
+		reply                      func(n int64) reply // nil: nothing answers at all
+		accepted, rejected, failed uint64
+	}{
+		{name: "the ladder runs out waiting on a parent", retries: 2,
+			reply:    func(int64) reply { return reply{422, map[string]string{bID: orphan(bID)}} },
+			accepted: 2, failed: 1},
+		{name: "the endpoint faults on a retry", retries: 2,
+			reply: func(n int64) reply {
+				if n == 1 {
+					return reply{500, map[string]string{bID: orphan(bID)}}
+				}
+				return reply{503, nil}
+			},
+			accepted: 2, failed: 1},
+		{name: "the endpoint rate-limits every retry", retries: 2,
+			reply: func(n int64) reply {
+				if n == 1 {
+					return reply{500, map[string]string{bID: orphan(bID)}}
+				}
+				return reply{429, nil}
+			},
+			accepted: 2, failed: 1},
+		{name: "no endpoint answers", retries: 2, failed: 3},
+		{name: "the salvage batch is refused whole too", retries: 2,
+			reply:  func(int64) reply { return reply{400, nil} },
+			failed: 3},
+		{name: "retries off", retries: 0,
+			reply:    func(int64) reply { return reply{500, map[string]string{bID: orphan(bID), cID: invalid(cID)}} },
+			accepted: 1, rejected: 1, failed: 1},
+		{name: "a verdict on a retry is still a rejection", retries: 2,
+			reply: func(n int64) reply {
+				if n == 1 {
+					return reply{500, map[string]string{bID: orphan(bID), cID: orphan(cID)}}
+				}
+				return reply{422, map[string]string{bID: invalid(bID), cID: orphan(cID)}}
+			},
+			accepted: 1, rejected: 1, failed: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dead := httptest.NewServer(http.NotFoundHandler())
+			url := dead.URL
+			dead.Close() // nothing listens there now
+			if tc.reply != nil {
+				var n atomic.Int64
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					raw, _ := io.ReadAll(r.Body)
+					present := map[string]bool{}
+					for _, tx := range splitBody(t, raw) {
+						present[txidOf(t, tx).Display()] = true
+					}
+					rp := tc.reply(n.Add(1))
+					w.WriteHeader(rp.code)
+					if rp.named == nil {
+						_, _ = io.WriteString(w, "upstream fault\n")
+						return
+					}
+					body := "Failed to process transactions:\n"
+					for id, line := range rp.named {
+						if present[id] {
+							body += line
+						}
+					}
+					_, _ = io.WriteString(w, body)
+				}))
+				defer srv.Close()
+				url = srv.URL
+			}
+
+			p, err := New(Config{
+				Endpoints: []string{url},
+				// One builder and a lingering batch, so the three members
+				// travel together.
+				BatchTxs: 10, Linger: 50 * time.Millisecond, Inflight: 1, Builders: 1, RetryAttempts: tc.retries,
+			}, testLogger())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go func() { _ = p.Run(ctx) }()
+			for _, tx := range [][]byte{a, b, c} {
+				if err := p.Enqueue(ctx, tx, txidOf(t, tx)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			waitFor(t, func() bool { s := p.Stats(); return s.Accepted+s.Rejected+s.Failed == 3 })
+			if s := p.Stats(); s.Accepted != tc.accepted || s.Rejected != tc.rejected || s.Failed != tc.failed {
+				t.Fatalf("accepted %d rejected %d failed %d, want %d %d %d",
+					s.Accepted, s.Rejected, s.Failed, tc.accepted, tc.rejected, tc.failed)
+			}
+		})
 	}
 }
 

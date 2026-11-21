@@ -129,7 +129,7 @@ func main() {
 		txInflight   = flag.Int("tx-inflight", 4, "concurrent batch submissions in flight")
 		txBuilders   = flag.Int("tx-builders", 4, "parallel batch builders (power of two, max 16)")
 		txQueue      = flag.Int("tx-queue", 8192, "transactions the pipe holds before backpressure blocks the lane read (0 = 8192). This is what absorbs the cluster's stall at a block boundary: measured at 20k tx/s the pipe sat at its 8192 ceiling for seconds around each block, the lane stopped reading, and the edge shed what it could not queue. Size it to stall-seconds x rate; memory is roughly that many transactions")
-		txRetries    = flag.Int("tx-retries", 6, "per-tx retries for failures that resolve with time (missing parent, THRESHOLD_EXCEEDED), on a 25ms..3.2s ladder (6 = ~8.5s); 0 = off")
+		txRetries    = flag.Int("tx-retries", 6, "per-tx retries for failures that resolve with time (missing parent, THRESHOLD_EXCEEDED), on a 25ms..3.2s ladder (6 = ~8.5s); a transaction still waiting after the last is counted failed, not rejected; 0 = off")
 
 		metricsAddr    = flag.String("metrics-addr", "[::]:9146", "HTTP listener for /metrics, /health*, /healthz, /readyz, /loglevel, /debug/pprof (empty = off)")
 		legacyPrefix   = flag.Bool("metrics-legacy-prefix", false, "also emit every pre-existing series under the old btb_ name alongside teranode_bridge_, for a dashboard still on the btb_ names")
@@ -256,8 +256,8 @@ func main() {
 			os.Exit(1)
 		}
 		if err := probeHealth(ctx, propagation); err != nil {
-			// Not fatal: the cluster may still be starting. Failures stay
-			// visible in the pipe's failed/rejected counters.
+			// Not fatal: the cluster may still be starting. A cluster that
+			// stays unreachable shows in the pipe's failed counter.
 			log.Warn("propagation health check failed at startup", "err", err)
 		}
 	}

@@ -39,6 +39,16 @@
 //     next endpoint, then salvaged as one retry batch (counted failed when
 //     retries are off).
 //
+// # Booking
+//
+// A transaction is booked rejected only on a VERDICT: an error line that names
+// it with a final failure (invalid, conflicting, a double spend). Nothing else
+// is a verdict. A member still waiting on its parent or on block assembly when
+// the retries run out (at once, with retries off), and every member of a batch
+// whose endpoint errored, could not be reached, answered a status with no
+// per-member report or kept rate-limiting, is booked failed: the cluster never
+// refused it, and it may be perfectly valid.
+//
 // Bytes handed to Enqueue are copied immediately: lane slices alias the
 // reader's buffer and are only valid until the next read.
 package txpipe
@@ -510,8 +520,8 @@ func (p *Pipe) submit(ctx context.Context, b *batch) {
 			// missing parent, 409 for a conflict, 400 for an invalid tx), or 500
 			// when a server fault is among them. Only a 500 used to be read this
 			// way; a 422 fell to the refusal path below, which re-sent all 512
-			// members six times over the retry ladder and then booked every one
-			// of them rejected. One orphan in a batch cost the cluster ~3000
+			// members six times over the retry ladder and then wrote every one
+			// of them off. One orphan in a batch cost the cluster ~3000
 			// re-validations of accepted transactions, at exactly the moment it
 			// was already behind (measured: a 20k tx/s lab run collapsed into
 			// 422 storms within seconds of its first orphan).
@@ -599,7 +609,8 @@ func (p *Pipe) namesMember(body string) bool {
 
 // settlePartial parses a partial-failure body's error lines, retries the named
 // txids that are waiting on a parent, books other named failures rejected, and
-// counts everything else accepted.
+// counts everything else accepted. With retries off, a member that is waiting
+// has no ladder to wait on and is booked failed: it was not refused.
 //
 // Attribution is not guaranteed: an error line may name no batch member (a
 // parse error before any txid was read, or a message quoting a foreign hash).
@@ -655,10 +666,10 @@ func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
 	p.accepted.Add(uint64(ok))
 
 	if p.cfg.RetryAttempts <= 0 || len(toRetry) == 0 {
-		// Error lines that matched no batch member (parse errors, foreign
-		// txids in messages) have no job to retry; they are counted against
-		// the batch as rejected only when they named one of ours.
-		p.rejected.Add(uint64(len(toRetry)))
+		// With retries off, a member waiting on its parent or on block
+		// assembly is left waiting. No verdict named it, so it is failed,
+		// not rejected.
+		p.failed.Add(uint64(len(toRetry)))
 		return
 	}
 	p.wg.Add(1)
@@ -709,7 +720,7 @@ func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 	p.retried.Add(uint64(len(jobs)))
 	// The ladder has to outlast the slowest parent, not the typical one: under a
 	// 500 tx/s soak a burst of 76 children (in 13 batches) stayed 422 past the
-	// old 25/100/400 ms ladder and was booked rejected, losing every one of them.
+	// old 25/100/400 ms ladder and ran out of retries, losing every one of them.
 	// Waiting longer costs a goroutine; giving up costs the transaction.
 	delays := []time.Duration{25 * time.Millisecond, 100 * time.Millisecond, 400 * time.Millisecond, 1600 * time.Millisecond, 3200 * time.Millisecond}
 	pending := jobs
@@ -786,14 +797,22 @@ func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 			continue // every member still waiting on a parent
 
 		default:
-			p.rejected.Add(uint64(len(pending)))
+			// A status with no per-member report (a 5xx, a bare 4xx, a
+			// proxy's answer) is the endpoint failing, not the cluster
+			// judging these transactions: no verdict, so failed.
+			p.failed.Add(uint64(len(pending)))
+			p.log.Warn("txpipe: retry batch refused", "endpoint", ep, "status", status,
+				"txs", len(pending), "body", firstLine(respBody), "booked", "failed")
 			return
 		}
 	}
 
 	if len(pending) > 0 {
-		p.rejected.Add(uint64(len(pending)))
-		p.log.Warn("txpipe: retries exhausted", "txs", len(pending))
+		// Still waiting when the ladder ran out: on a parent, on block
+		// assembly, or on an endpoint that would not answer. Nothing refused
+		// them, so they are failed, not rejected.
+		p.failed.Add(uint64(len(pending)))
+		p.log.Warn("txpipe: retries exhausted", "txs", len(pending), "booked", "failed")
 	}
 }
 

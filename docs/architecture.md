@@ -204,7 +204,11 @@ outpoints are walked, and a dependency on the open batch seals it first.
 Failures that resolve with time (`422`, missing parent, the only use of that
 status; and `THRESHOLD_EXCEEDED`, block assembly shedding load) retry as a
 single further batch on a short ladder, bounded by the same inflight
-semaphore; merit rejections do not.
+semaphore; merit rejections do not. A transaction is counted `rejected` only on
+a verdict, an error line naming it with a final failure (invalid, conflicting, a
+double spend). Anything that ends without one is `failed`: an endpoint that
+errors, cannot be reached or keeps rate-limiting, and a transaction still
+waiting on its parent or on block assembly when the ladder runs out.
 
 ## Why HTTP
 
@@ -233,9 +237,9 @@ one txid.
 | Answer | Outcome |
 | --- | --- |
 | `200` | every member `accepted` (an already-known transaction is accepted too) |
-| a `Failed to process transactions:` body, whatever the status | partial failure: the members the error lines name are settled individually (missing parent and `THRESHOLD_EXCEEDED` go on the retry ladder, the rest are `rejected`); the unnamed members are `accepted` |
-| `429` | nothing was processed; the whole batch is retried after a backoff |
-| transport error or any other status | one failover attempt on the next endpoint, then the whole batch is salvaged as one retry batch (`failed` when `-tx-retries` is `0`) |
+| a `Failed to process transactions:` body, whatever the status | partial failure: the members the error lines name are settled individually (missing parent and `THRESHOLD_EXCEEDED` go on the retry ladder, and are `failed` if it runs out or `-tx-retries` is `0`; the rest are `rejected`); the unnamed members are `accepted` |
+| `429` | nothing was processed; the whole batch is retried after a backoff, and is `failed` if the backoff runs out |
+| transport error or any other status | one failover attempt on the next endpoint, then the whole batch is salvaged as one retry batch; `failed` when `-tx-retries` is `0`, when the retry batch is refused the same way, or when the ladder runs out |
 
 Multiple `-propagation` endpoints are round-robined per batch request, which spreads
 long-lived flows across a multi-node cluster or a VIP with no per-object work.
@@ -505,8 +509,8 @@ and to isolate object-plane faults from cluster-side ones.
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | Delivery link flaps / fails over        | Lanes accept redials; the tx cache's admission drops re-delivered transactions and the announce registry drops re-announcements; the cache keeps the original bytes |
 | Malformed object on a lane              | Connection dropped (no resync point exists), `dropped` incremented, sender redials                     |
-| Propagation endpoint down               | The batch gets one failover attempt on the next endpoint, then is salvaged as one retry batch (see [Why HTTP](#why-http)) |
-| Cluster refuses a transaction on merits | `rejected`: not retried; retrying identical bytes cannot change the answer                            |
+| Propagation endpoint down               | The batch gets one failover attempt on the next endpoint, then is salvaged as one retry batch (see [Why HTTP](#why-http)); what is still undelivered when the ladder runs out is `failed`, never `rejected` |
+| Cluster refuses a transaction on merits | `rejected`, on an error line naming it: not retried; retrying identical bytes cannot change the answer |
 | Kafka unreachable                       | `announce failures` increments; the object stays cached and servable but is **not** recorded as announced, so the next redelivery announces it again |
 | Cache entry evicted before the pull     | Pull answers `404`; the cluster falls back to its ordinary peer announce-and-pull path                 |
 | Asset API rate-limits the reverse path  | Retry ladder; after exhaustion the object is a `failure` and is not published                          |
