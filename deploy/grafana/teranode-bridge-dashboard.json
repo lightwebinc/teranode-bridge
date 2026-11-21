@@ -1539,7 +1539,7 @@
       "id": 22,
       "type": "timeseries",
       "title": "Submit latency p99",
-      "description": "Labelled by outcome because 'slow' and 'refusing' are different faults with the same counter signature: a 429 in a millisecond and an accept in two seconds move the batch counter identically.",
+      "description": "Labeled by outcome because 'slow' and 'refusing' are different faults with the same counter signature: a 429 in a millisecond and an accept in two seconds move the batch counter identically.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -2206,7 +2206,7 @@
       "id": 30,
       "type": "timeseries",
       "title": "Up-tunnel write p99",
-      "description": "Includes time queued behind another object: one connection per class, so the writes serialise and the wait is time the reverse path is actually blocked.",
+      "description": "Includes time queued behind another object: one connection per class, so the writes serialize and the wait is time the reverse path is actually blocked.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"

@@ -34,8 +34,9 @@ fetches and validates exactly as it would from a peer.
 
 See [Architecture › Why an announce shim](docs/architecture.md#why-an-announce-shim).
 
-Four planes (ingest, cache, retrieval, reverse) run in one process by default
-(`-mode all`); splitting them is deployment topology. See
+Four planes (ingest, cache, retrieval, reverse) run in one process (`-mode all`,
+the default). The cache is in-process, so a deployment scales by adding
+bridges, each advertising its own retrieval URL. See
 [Architecture](docs/architecture.md).
 
 ## Documentation
@@ -50,7 +51,7 @@ Four planes (ingest, cache, retrieval, reverse) run in one process by default
 
 ## Requirements
 
-- Go 1.26 or later
+- Go 1.26.2 or later
 - A reachable Teranode cluster (propagation HTTP, Kafka, asset HTTP, blockchain
   gRPC); `-mode tx` needs only propagation HTTP, and `-mode sink` none of them
 - Network reachability *from* the cluster back to the bridge's retrieval plane
@@ -60,7 +61,7 @@ Four planes (ingest, cache, retrieval, reverse) run in one process by default
 ```bash
 make build          # static binary at ./teranode-bridge
 make test           # go test -race ./...
-make ci             # full containerised pipeline
+make ci             # full containerized pipeline
 ```
 
 [Development](docs/development.md) covers CI, the container image and dependencies.
@@ -69,12 +70,14 @@ make ci             # full containerised pipeline
 
 ```bash
 # Delivery only: terminate the lanes, submit transactions, announce and serve
-# subtrees and blocks.
+# subtrees and blocks. -peer-id is a synthetic id, registered with no p2p
+# service; -mode all refuses to start without one.
 ./teranode-bridge \
   -retrieval-listen '[2001:db8:3f::1]:9145' \
   -advertise        'http://[2001:db8:3f::1]:9145' \
   -propagation      'http://192.0.2.10:20833' \
-  -kafka            '192.0.2.10:19092'
+  -kafka            '192.0.2.10:19092' \
+  -peer-id          '12D3KooW…'
 
 # Transaction lane only: subtrees and blocks stay on the cluster's libp2p.
 ./teranode-bridge -mode tx -propagation 'http://192.0.2.10:8833'
@@ -116,7 +119,7 @@ non-zero means the object plane returned different bytes than were published.
 A Kubernetes Helm chart is published from a dedicated chart repository:
 
 - Repository: [`charts/teranode-bridge`](https://github.com/lightwebinc/charts/tree/main/charts/teranode-bridge)
-- OCI: `helm install bridge oci://ghcr.io/lightwebinc/charts/teranode-bridge --version 0.10.0`
+- OCI: `helm install bridge oci://ghcr.io/lightwebinc/charts/teranode-bridge --version 0.10.1`
 
 `config.peerId` is required, and `config.advertise`, `config.propagation` and
 `config.kafka` unless `config.mode=sink`. See the chart README for scaling rules.
@@ -143,7 +146,7 @@ A Kubernetes Helm chart is published from a dedicated chart repository:
 ├── docs/                    # architecture, configuration, development, metrics reference
 ├── Dockerfile
 ├── Makefile
-└── .github/workflows/{ci,codeql,image-publish,release,vuln}.yml
+└── .github/workflows/{ci,codeql,image-publish,release,scorecard,vuln,workflow-lint}.yml
 ```
 
 The top-level packages are the public extension seams an importing module

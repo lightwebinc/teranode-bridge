@@ -33,13 +33,16 @@ validates, and then owns the data exactly as it would from a peer.
 | ------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | **Ingest**    | lane termination, frame parse, cache write, announce produce                    | inbound object bandwidth (stateless; round-robin delivery may spray objects across any number of bridges) |
 | **Cache**     | content-addressed, TTL'd store of pushed bytes; a cache, not a store of record | delivery rate × validation lag (seconds)                                                                   |
-| **Retrieval** | serves the cluster's asset-style pulls out of the cache                         | pull concurrency (stateless replicas behind a VIP)                                                         |
+| **Retrieval** | serves the cluster's asset-style pulls out of the cache                         | pull concurrency; a bridge serves what it received, at its own `-advertise` URL                           |
 | **Reverse**   | blockchain notifications → BRC-143/144 → object-plane submit                    | one submitter per class                                                                                    |
 
-At small scale all four run in one process (`-mode all`, the default). Splitting
-them across processes or hosts is deployment topology, not a different design:
-every ingest instance writes the same cache and stamps the same retrieval URL,
-so there is no affinity and no per-instance URL bookkeeping.
+All four run in one process (`-mode all`, the default). The cache is
+in-process, so a bridge serves pulls only for the objects it received and
+announces its own `-advertise` URL for them. A deployment scales by adding
+bridges, each with its own URL: behind one shared address, a pull that lands
+on a replica other than the one holding the object is answered `404`. The
+`retrieval.Store` seam is where an importing module substitutes a shared
+store.
 
 ## Data flow
 
@@ -305,8 +308,11 @@ idle.
 
 `cache` is a hash-keyed LRU with a TTL and a total-bytes ceiling, safe
 for concurrent use (ingest writes while retrieval reads). Two independent
-instances are created: one for objects (subtrees and blocks), one for
-transactions. Storing a key that already exists refreshes it and keeps the
+instances are created: one for objects (subtrees and blocks), and one for
+transactions, which is the generational variant (two map generations rotated
+wholesale instead of an LRU; see
+[Configuration](configuration.md#cache-and-duplicate-suppression)). In the
+object cache, storing a key that already exists refreshes it and keeps the
 original bytes, which is what makes re-delivery a no-op.
 
 This is a **cache, not a store of record**: the store of record is the cluster's
@@ -353,14 +359,17 @@ subtrees and blocks reach `announced`, never transactions, so in practice it hol
 
 `reverse` holds a gRPC `Subscribe` on the cluster's blockchain service
 and republishes what the cluster produces. `proto/blockchain_api` is a minimal,
-wire-compatible subset of that service: one service, one method, two messages,
-no imports. Only the proto package name, service name, method name and field
-numbers are load-bearing on the wire.
+wire-compatible subset of that service: one service, three methods (`Subscribe`
+and the two cluster-state reads, `GetFSMCurrentState` and
+`GetBestBlockHeader`), no imports. Only the proto package name, service name,
+method names and field numbers are load-bearing on the wire.
 
 1. **Learn.** `Subtree` (type 1) fires when a subtree is admitted; `Block`
-   (type 2) on block acceptance. The stream is plaintext and unauthenticated at
-   the default `security_level_grpc`. A lost stream is routine (the cluster rolls its gRPC
-   connections), so the subscriber reconnects with backoff from 1 s to 30 s.
+   (type 2) on block acceptance. The stream is plaintext at the default
+   `security_level_grpc`, and Teranode v0.16.1 and later require the cluster's
+   `grpc_admin_api_key` on it (`-blockchain-api-key-file`). A lost stream is
+   routine (the cluster rolls its gRPC connections), so the subscriber
+   reconnects with backoff from 1 s to 30 s.
 
 2. **Filter by origin.** The notification stream carries **no local-vs-remote
    marker**: the node's own p2p announces every notification to its gossip
@@ -404,7 +413,7 @@ numbers are load-bearing on the wire.
    `-edge-block-port` 8727, the fabric-side lane numbers, carrying the same
    bare BRC-143/144 objects this bridge receives on its consumer-side
    9143/9144 lanes). The stream is bare, so a partial write leaves the receiver's
-   parser mid-object with no way to resynchronise: the only correct recovery is
+   parser mid-object with no way to resynchronize: the only correct recovery is
    to drop the connection and redial, which is what a failed write does.
 
 Every frame is self-verified against the shared codec before it leaves the
@@ -449,7 +458,7 @@ through this one package.
 `tnwire` converts between Teranode's block serialization and the
 BRC-144 push frame in both directions, deliberately in one file so they cannot
 drift. The two formats carry identical information in identical order and differ
-only in how four counts are written:
+only in how five integers are written:
 
 ```
 BRC-144:  header[80] | txCount u64BE | size u64BE | subtreeCount u64BE |
@@ -489,15 +498,15 @@ and to isolate object-plane faults from cluster-side ones.
 
 | Failure                                 | Absorbed by                                                                                            |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Delivery link flaps / fails over        | Lanes accept redials; the seen registry drops re-delivered transactions and the announce registry drops re-announcements; the cache keeps the original bytes |
+| Delivery link flaps / fails over        | Lanes accept redials; the tx cache's admission drops re-delivered transactions and the announce registry drops re-announcements; the cache keeps the original bytes |
 | Malformed object on a lane              | Connection dropped (no resync point exists), `dropped` incremented, sender redials                     |
-| Propagation endpoint down               | Round-robin spreads to the remaining endpoints; the object counts as `failed` and is logged            |
+| Propagation endpoint down               | The batch gets one failover attempt on the next endpoint, then is salvaged as one retry batch (see [Why HTTP](#why-http)) |
 | Cluster refuses a transaction on merits | `rejected`: not retried; retrying identical bytes cannot change the answer                            |
 | Kafka unreachable                       | `announce failures` increments; the object stays cached and servable but is **not** recorded as announced, so the next redelivery announces it again |
 | Cache entry evicted before the pull     | Pull answers `404`; the cluster falls back to its ordinary peer announce-and-pull path                 |
 | Asset API rate-limits the reverse path  | Retry ladder; after exhaustion the object is a `failure` and is not published                          |
 | Blockchain stream lost                  | Reconnect with backoff; `reconnects` increments                                                        |
-| Up-tunnel write fails                   | Connection closed and redialled on the next object; `failures` and `redials` increment                 |
+| Up-tunnel write fails                   | Connection closed and redialed on the next object; `failures` and `redials` increment                  |
 | Bridge restart                          | Registry rebuilt lazily; the cluster's hash dedup absorbs re-injection                                 |
 | Submitter down                          | No corruption, just a gap: the fabric misses this cluster's output until a standby is promoted         |
 
@@ -645,6 +654,13 @@ a plaintext dial then fails outright. That failure is partial and easy to
 misread (delivery, announce and retrieval all keep working while only the
 reverse path retries forever), which is why the level is an explicit bridge flag
 rather than an assumption.
+
+Teranode v0.16.1 and later also require the cluster's `grpc_admin_api_key` on
+every blockchain method but Health. The bridge sends it as `x-api-key`
+metadata on every call when `-blockchain-api-key-file` is set; without it the
+subscription is refused `Unauthenticated`, the same partial failure. The key
+is only as private as the transport: at level 0 it travels in plaintext and at
+level 1 to an unverified server, and the bridge warns in both cases.
 
 Client keepalive is load-bearing rather than tuning. grpc-go pings never by
 default, the connection crosses a tunnel, and a silently dropped path leaves

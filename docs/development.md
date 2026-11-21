@@ -4,7 +4,7 @@ Build, CI and container image details for teranode-bridge.
 
 ## Requirements
 
-- Go 1.26 or later
+- Go 1.26.2 or later
 - For `make ci` / `make ci-*`: Docker (Dagger provisions its engine through it)
 - For `make proto`: [`buf`](https://buf.build) plus `protoc-gen-go` and
   `protoc-gen-go-grpc` on `PATH`
@@ -15,7 +15,7 @@ Build, CI and container image details for teranode-bridge.
 make build          # static binary at ./teranode-bridge
 make test           # go test -race ./...
 make lint           # golangci-lint
-make ci             # full containerised pipeline (see below)
+make ci             # full containerized pipeline (see below)
 make help           # list targets
 ```
 
@@ -61,9 +61,10 @@ build deliberately does *not* use that replace: a published image always resolve
 
 - [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common): `objfmt`, the push object-frame codecs shared with the rest of the stack
 - [`github.com/twmb/franz-go`](https://github.com/twmb/franz-go): Kafka producer
-- `google.golang.org/grpc`, `google.golang.org/protobuf`: blockchain notification stream
+- `google.golang.org/grpc`, `google.golang.org/protobuf`: blockchain notification stream and cluster-state reads
 
 The bridge deliberately does **not** link Teranode's own module. The two contracts
-it needs (a three-field announcement message and a one-method notification
-stream) are reproduced from their wire definitions instead, so a small bridge does
-not pull in a full node's dependency tree.
+it needs (a three-field announcement message, and three methods of the
+blockchain service: the notification stream and two cluster-state reads) are
+reproduced from their wire definitions instead, so a small bridge does not pull
+in a full node's dependency tree.
