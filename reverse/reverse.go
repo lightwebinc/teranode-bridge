@@ -184,6 +184,15 @@ func New(cfg Config, seen *registry.Registry, build Builder, log *slog.Logger) (
 	if err != nil {
 		return nil, fmt.Errorf("reverse: blockchain transport security: %w", err)
 	}
+	if cfg.TLS.SecurityLevel == 1 {
+		// Level 1 believes any server certificate (unverifiedServerTLS). It is
+		// the operator's explicit choice, so say what it costs where the
+		// operator looks, whether or not an API key rides on it.
+		log.Warn("blockchain connection does not verify the server: security level 1 is TLS that accepts any certificate",
+			"security_level", cfg.TLS.SecurityLevel,
+			"risk", "any host on the path can impersonate the cluster; this stops passive eavesdropping only",
+			"fix", "-blockchain-security-level 2 or 3 with -blockchain-ca-cert verifies the server")
+	}
 	ka, clamped := keepaliveParams(cfg.KeepaliveTime, cfg.KeepaliveTimeout, cfg.PermitWithoutStream)
 	if clamped {
 		log.Warn("blockchain keepalive interval raised to grpc's floor",

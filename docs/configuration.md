@@ -418,7 +418,7 @@ dies, as an endless `blockchain subscribe failed, retrying`.
 | Level | Cluster side | Bridge side |
 | --- | --- | --- |
 | `0` | plaintext (Teranode's default) | plaintext |
-| `1` | TLS | TLS, **server certificate not verified**; upstream's own comment calls this MITM-exploitable by design. Encrypts against passive eavesdropping and nothing more. |
+| `1` | TLS | TLS, **server certificate not verified**; upstream's own comment calls this MITM-exploitable by design. Encrypts against passive eavesdropping and nothing more. Never the default: only an explicit `-blockchain-security-level 1` selects it, and the bridge logs a warning at startup whenever it does. Use 2 or 3 to verify the server. |
 | `2` | TLS, accepts any client certificate | presents a certificate, verifies the server against the CA |
 | `3` | TLS, requires and verifies the client certificate | identical to level 2; only the server's `ClientAuth` differs |
 
