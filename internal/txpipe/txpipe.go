@@ -24,18 +24,20 @@
 // # Failure classification
 //
 //   - 200: every transaction in the batch was accepted (or already known).
-//   - 500 "Failed to process transactions": SOME failed; the others were still
-//     processed. The body carries one error line per failure including the
-//     txid, so failures are re-attributed to batch members and retried as one
-//     further batch: missing-parent resolves once the parent lands, which is
-//     bounded-retry, not fail-forever.
+//   - a "Failed to process transactions" body (a 500, or any status whose
+//     body names a member): SOME failed; the others were still processed. The
+//     body carries one error line per failure including the txid, so failures
+//     are re-attributed to batch members and retried as one further batch:
+//     missing-parent resolves once the parent lands, which is bounded-retry,
+//     not fail-forever.
 //   - 429: the endpoint's rate limiter refused the request before reading it.
 //     No member was processed, but splitting the batch into per-member retries
 //     would multiply the request rate by the batch size against the very
 //     limiter that just refused us, so a rate-limited batch backs off and is
 //     retried WHOLE, and never enters per-member salvage.
 //   - anything else / transport error: the whole batch is retried once on the
-//     next endpoint, then counted failed.
+//     next endpoint, then salvaged as one retry batch (counted failed when
+//     retries are off).
 //
 // Bytes handed to Enqueue are copied immediately: lane slices alias the
 // reader's buffer and are only valid until the next read.

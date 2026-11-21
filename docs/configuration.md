@@ -359,8 +359,9 @@ reports every dependency but only lets some of them fail readiness:
 
 The gating checks are all conditions *only this process* can be in, which is what
 makes them safe: a shared outage cannot take every bridge out of rotation at
-once. `-health-strict` collapses the distinction and restores Teranode's
-all-or-nothing behavior for deployments that would rather fail closed.
+once. `-health-strict` (default `false`) collapses the distinction and restores
+Teranode's all-or-nothing behavior for deployments that would rather fail
+closed.
 
 ### Metric naming and the legacy prefix
 
@@ -430,9 +431,9 @@ dies, as an endless `blockchain subscribe failed, retrying`.
 > for**. The bridge implements 2 and 3 because it *can* carry cert paths.
 
 Misconfiguration is refused at startup with the flag named, rather than
-surfacing later as a handshake error that reads like a cluster fault. The
-blockchain service registers no API-key interceptor, so no credential beyond TLS
-is needed.
+surfacing later as a handshake error that reads like a cluster fault. The only
+credential beyond TLS is the API key above, which Teranode v0.16.1 and later
+require; an older cluster needs none.
 
 **Keepalive is what stops the reverse path wedging.** grpc-go's client keepalive
 default is *never*: an unconfigured client sends no pings. The connection
@@ -442,8 +443,8 @@ forever and the reconnect loop, which is only entered on a `Recv` error, never
 runs. The cluster's own keepalive does not help: it tears down *its* half, and
 the client never learns. Blockchain sends `PING` notifications every 10 s, so
 `teranode_bridge_last_notification_timestamp_seconds` makes the wedge visible
-within seconds; visible is not self-healing, and before this the only recovery
-was restarting the process.
+within seconds; visible is not self-healing, and without client keepalive the
+only recovery is restarting the process.
 
 | Flag | Default | Value | Description |
 | --- | --- | --- | --- |
@@ -531,7 +532,7 @@ Read the real ones from the cluster's own settings:
 
 | Service                   | Value                      | Used for                        |
 | ------------------------- | -------------------------- | ------------------------------- |
-| Propagation HTTP          | `:20833`                   | `POST /tx`, `GET /health`       |
+| Propagation HTTP          | `:20833`                   | `POST /txs`, `GET /health`      |
 | Kafka (external listener) | `:19092`                   | subtree and block announcements |
 | Asset HTTP                | `:20090` (under `/api/v1`) | reverse path fetches            |
 | Blockchain gRPC           | `:20087`                   | reverse path `Subscribe`        |
@@ -544,7 +545,8 @@ the cluster is modified: no patched ingest, no new RPC, no changed validation.
 ### Full bridge, delivery only
 
 Terminates all three lanes, submits transactions, announces subtrees and blocks,
-and serves the pulls. No reverse path.
+and serves the pulls. No reverse path. `-peer-id` is this bridge's synthetic id
+(see [Announcements](#announcements)); `-mode all` refuses to start without it.
 
 ```bash
 teranode-bridge \
@@ -554,7 +556,8 @@ teranode-bridge \
   -retrieval-listen '[2001:db8:3f::1]:9145' \
   -advertise        'http://[2001:db8:3f::1]:9145' \
   -propagation      'http://192.0.2.10:20833' \
-  -kafka            '192.0.2.10:19092'
+  -kafka            '192.0.2.10:19092' \
+  -peer-id          '12D3KooW…'
 ```
 
 ### Full bridge, both directions
@@ -571,11 +574,15 @@ teranode-bridge \
   -advertise        'http://[2001:db8:3f::1]:9145' \
   -propagation      'http://192.0.2.10:20833' \
   -kafka            '192.0.2.10:19092' \
+  -peer-id          '12D3KooW…' \
   -blockchain       '192.0.2.10:20087' \
   -local-asset      'http://192.0.2.10:20090/api/v1' \
   -edge-ingress     '2001:db8:1::1' \
   -submitter=true
 ```
+
+Against Teranode v0.16.1 or later, add
+`-blockchain-api-key-file /etc/teranode-bridge/grpc-admin.key`.
 
 ### Standby bridge
 
@@ -632,6 +639,7 @@ ExecStart=/usr/local/bin/teranode-bridge \
   -advertise 'http://[2001:db8:3f::1]:9145' \
   -propagation 'http://192.0.2.10:20833' \
   -kafka '192.0.2.10:19092' \
+  -peer-id '12D3KooW…' \
   -blockchain '192.0.2.10:20087' \
   -local-asset 'http://192.0.2.10:20090/api/v1' \
   -edge-ingress '2001:db8:1::1'
@@ -651,7 +659,8 @@ unprivileged ports by default. Give it
 redials during a restart waits in the kernel's accept queue instead of being
 refused. `FileDescriptorName=` names every socket of its unit, so use one
 `.socket` unit per lane, named for the lane; the bridge adopts each by that
-name and listens itself on any lane without one:
+name (systemd's `sd_listen_fds` protocol: `LISTEN_PID`, `LISTEN_FDS`,
+`LISTEN_FDNAMES`) and listens itself on any lane without one:
 
 ```ini
 # teranode-bridge-tx.socket (and -subtree.socket, -block.socket alike,
@@ -688,7 +697,8 @@ docker run --rm \
   ghcr.io/lightwebinc/teranode-bridge:<tag> \
     -advertise   'http://[2001:db8:3f::1]:9145' \
     -propagation 'http://192.0.2.10:20833' \
-    -kafka       '192.0.2.10:19092'
+    -kafka       '192.0.2.10:19092' \
+    -peer-id     '12D3KooW…'
 ```
 
 The image runs as `nonroot` on a distroless static base, so every lane must stay
@@ -743,7 +753,7 @@ Fixed values, listed so they are not mistaken for flags:
 | ------------------------------ | ----------------------------------------------- |
 | Seen-registry TTL / capacity   | 30 min / 2²⁰ entries                            |
 | Announce-registry TTL / capacity | 30 min / 2²⁰ entries (subtrees and blocks only) |
-| Propagation HTTP timeout       | 30 s; 32 idle conns per host, 90 s idle timeout |
+| Propagation HTTP timeout       | 30 s; at most `-tx-inflight` + 8 connections per endpoint, 90 s idle timeout |
 | Kafka produce timeout          | 10 s, `RequiredAcks=all-ISR`                    |
 | Asset fetch timeout            | 30 s                                            |
 | Asset rate-limit retry ladder  | 200 ms, 1 s, 3 s, 8 s                           |

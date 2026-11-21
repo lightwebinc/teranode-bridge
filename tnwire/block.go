@@ -2,7 +2,7 @@
 // BRC-144 push frame.
 //
 // The two formats carry identical information in identical order and differ
-// only in how four counts are written: BRC-144 uses fixed 8-byte big-endian
+// only in how five integers are written: BRC-144 uses fixed 8-byte big-endian
 // fields, so a frame can be sized without parsing; Teranode uses Bitcoin
 // CompactSize varints. The 80-byte header, the subtree roots, the in-band
 // coinbase and the coinbase BUMP are byte-for-byte the same in both.
