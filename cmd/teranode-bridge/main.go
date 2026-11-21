@@ -506,13 +506,6 @@ func main() {
 	log.Info("bridge stopped")
 }
 
-// announceFlagsErr validates the flags an announcing (non-sink) bridge cannot
-// safely run without; a non-empty return is the startup refusal message. An
-// empty peer id is refused rather than warned: the cluster's catchup
-// substitutes the announce URL for a missing id, targets the retrieval plane
-// for /headers_from_common_ancestor, 404s, and circuit-breaks the cluster out
-// of recovery (verified at teranode 1cca625). Sink mode neither announces nor
-// needs an identity, so it is exempt.
 // modeFlagsErr validates -mode and the flags each mode requires: the full
 // bridge announces, so it needs the announce flags; -mode tx needs only
 // somewhere to submit, and has no reverse path to configure.
@@ -535,6 +528,13 @@ func modeFlagsErr(mode string, propagationN, brokersN int, advertise, peerID, bl
 	}
 }
 
+// announceFlagsErr validates the flags an announcing (non-sink) bridge cannot
+// safely run without; a non-empty return is the startup refusal message. An
+// empty peer id is refused rather than warned: the cluster's catchup
+// substitutes the announce URL for a missing id, targets the retrieval plane
+// for /headers_from_common_ancestor, 404s, and circuit-breaks the cluster out
+// of recovery (verified at teranode 1cca625). Sink mode neither announces nor
+// needs an identity, so it is exempt.
 func announceFlagsErr(propagationN, brokersN int, advertise, peerID string) string {
 	if propagationN == 0 || brokersN == 0 || advertise == "" {
 		return "-propagation, -kafka and -advertise are required with -mode all (-mode tx needs only -propagation)"
@@ -897,8 +897,6 @@ func (s cacheStore) Put(h hashid.Hash, class string, body []byte) {
 	s.c.Put(cache.Key(h), class, body)
 }
 
-// nilIfNil keeps a typed-nil *UpTunnel from becoming a non-nil Publisher
-// interface, which would make the reverse path try to send through nothing.
 // ingressAddrs expands a comma-separated -edge-ingress host list into host:port
 // targets for one class, preserving order, the first entry is the preferred
 // (normally active-side) target.
@@ -912,6 +910,8 @@ func ingressAddrs(hosts string, port int) []string {
 	return out
 }
 
+// nilIfNil keeps a typed-nil *UpTunnel from becoming a non-nil Publisher
+// interface, which would make the reverse path try to send through nothing.
 func nilIfNil(u *submit.UpTunnel) reverse.Publisher {
 	if u == nil {
 		return nil

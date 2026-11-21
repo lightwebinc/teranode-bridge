@@ -109,7 +109,7 @@ var (
 	pipeSeals = newPair("txpipe_batch_seals_total",
 		"Why batches were sealed. `dependency` = a tx referenced a parent in the open batch (the /txs contract forbids parent+child in one request); `linger` = age; `size`/`bytes` = full.", []string{"reason"})
 	pipeRetried = newPair("txpipe_retried_total",
-		"Transactions re-submitted individually after a partial batch failure (missing-parent resolves once the parent lands).", nil)
+		"Transactions re-submitted as one further batch after a partial or whole-batch failure (missing-parent resolves once the parent lands).", nil)
 	pipeRetryOK = newPair("txpipe_retry_accepted_total",
 		"Retried transactions the cluster then accepted.", nil)
 	pipeUnattributed = newPair("txpipe_unattributed_total",
