@@ -31,7 +31,7 @@ validates, and then owns the data exactly as it would from a peer.
 
 | Plane         | Role                                                                            | Scales with                                                                                                |
 | ------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| **Ingest**    | lane termination, frame parse, cache write, announce produce                    | inbound object bandwidth (stateless; round-robin delivery may spray objects across any number of bridges) |
+| **Ingest**    | lane termination, frame parse, cache write, announce produce                    | inbound object bandwidth (stateless per object; a subtree's members must reach its bridge, below)         |
 | **Cache**     | content-addressed, TTL'd store of pushed bytes; a cache, not a store of record | delivery rate × validation lag (seconds)                                                                   |
 | **Retrieval** | serves the cluster's asset-style pulls out of the cache                         | pull concurrency; a bridge serves what it received, at its own `-advertise` URL                           |
 | **Reverse**   | blockchain notifications → BRC-143/144 → object-plane submit                    | one submitter per class                                                                                    |
@@ -40,7 +40,12 @@ All four run in one process (`-mode all`, the default). The cache is
 in-process, so a bridge serves pulls only for the objects it received and
 announces its own `-advertise` URL for them. A deployment scales by adding
 bridges, each with its own URL: behind one shared address, a pull that lands
-on a replica other than the one holding the object is answered `404`. The
+on a replica other than the one holding the object is answered `404`. A
+subtree's data is served only by a bridge that holds every member
+transaction: a member delivered to another bridge makes the pull `404`, and
+the cluster's batch fallback asks the same bridge. So each bridge that
+receives subtrees must receive the whole transaction class; round-robin
+delivery of transactions across bridges breaks subtree pulls. The
 `retrieval.Store` seam is where an importing module substitutes a shared
 store.
 
