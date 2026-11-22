@@ -513,8 +513,10 @@ func (p *Pipe) submit(ctx context.Context, b *batch) {
 			p.accepted.Add(n)
 			return
 
-		case strings.HasPrefix(body, partialPrefix) && (status == http.StatusInternalServerError || p.namesMember(body)):
-			// Partial failure, WHATEVER the status: propagation validates every
+		case strings.HasPrefix(body, partialPrefix) && p.namesMember(body):
+			// A 500 whose body names no member has no per-member report and
+			// falls to the refusal path below: failover, then the retry
+			// ladder, then failed. Partial failure, WHATEVER the status: propagation validates every
 			// member independently and accepts the good ones, then reports the
 			// batch with the first client error among the failures (422 for a
 			// missing parent, 409 for a conflict, 400 for an invalid tx), or 500
@@ -766,7 +768,7 @@ func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 			p.accepted.Add(uint64(len(pending)))
 			return
 
-		case strings.HasPrefix(respBody, partialPrefix) && (status == http.StatusInternalServerError || p.namesMember(respBody)):
+		case strings.HasPrefix(respBody, partialPrefix) && p.namesMember(respBody):
 			// Any status: only the transactions the body still NAMES are
 			// outstanding; the rest of the retry batch landed and are booked as
 			// recovered, less one for each line about a transaction outside
@@ -807,6 +809,11 @@ func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 
 		case status == http.StatusUnprocessableEntity:
 			continue // every member still waiting on a parent
+
+		case status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout:
+			// A proxy's transient refusal, as a transport error: the ladder
+			// tries again, and books failed only when it runs out.
+			continue
 
 		default:
 			// A status with no per-member report (a 5xx, a bare 4xx, a

@@ -936,3 +936,66 @@ func TestCancelFlushesWhatIsQueued(t *testing.T) {
 		t.Fatalf("cluster got %d, accepted %d; want all %d submitted on the stop", got.Load(), p.Stats().Accepted, n)
 	}
 }
+
+// TestNoMemberNamedIsFailedNotAccepted: a 500 "Failed to process
+// transactions" body naming no member is no per-member report, so the batch is
+// booked failed, never accepted; and a transient 503 is retried like a
+// transport error, booking failed only when the ladder runs out.
+func TestNoMemberNamedIsFailedNotAccepted(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		retries int
+		reply   func(n int64, w http.ResponseWriter)
+		accept  uint64
+		failed  uint64
+	}{
+		{name: "500 naming nobody, retries off", retries: 0, failed: 3,
+			reply: func(_ int64, w http.ResponseWriter) {
+				w.WriteHeader(500)
+				_, _ = io.WriteString(w, "Failed to process transactions: internal error\n")
+			}},
+		{name: "500 naming nobody, retries on", retries: 2, failed: 3,
+			reply: func(_ int64, w http.ResponseWriter) {
+				w.WriteHeader(500)
+				_, _ = io.WriteString(w, "Failed to process transactions: internal error\n")
+			}},
+		{name: "transient 503 on a retry recovers", retries: 3, accept: 3,
+			reply: func(n int64, w http.ResponseWriter) {
+				switch n {
+				case 1, 2, 3: // first batch refused twice, then the first retry
+					w.WriteHeader(503)
+				default:
+					w.WriteHeader(200)
+				}
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var n atomic.Int64
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				tc.reply(n.Add(1), w)
+			}))
+			defer srv.Close()
+			p, err := New(Config{
+				Endpoints: []string{srv.URL},
+				BatchTxs:  10, Linger: 50 * time.Millisecond, Inflight: 1, Builders: 1, RetryAttempts: tc.retries,
+			}, testLogger())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go func() { _ = p.Run(ctx) }()
+			for i := byte(0); i < 3; i++ {
+				tx := rawTx([32]byte{90 + i}, 90+i)
+				if err := p.Enqueue(ctx, tx, txidOf(t, tx)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			waitFor(t, func() bool { s := p.Stats(); return s.Accepted+s.Rejected+s.Failed == 3 })
+			if s := p.Stats(); s.Accepted != tc.accept || s.Rejected != 0 || s.Failed != tc.failed {
+				t.Fatalf("accepted %d rejected %d failed %d, want %d 0 %d", s.Accepted, s.Rejected, s.Failed, tc.accept, tc.failed)
+			}
+		})
+	}
+}
