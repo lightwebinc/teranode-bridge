@@ -4,7 +4,7 @@
 or drop it into a provisioning directory alongside Teranode's own dashboards.
 
 It expects a Prometheus data source with **uid `prometheus`**, the
-kube-prometheus-stack default, and the convention every dashboard in this fleet
+kube-prometheus-stack default, and the convention every dashboard in this project
 uses. On import Grafana will let you remap it if yours differs.
 
 ## Requirements
@@ -14,7 +14,7 @@ uses. On import Grafana will let you remap it if yours differs.
 - A **`cluster` label** on the bridge targets. The "Submitters active" tile sums
   `teranode_bridge_submitter_active` **by cluster**, an invariant that must equal
   exactly 1 per cluster per class; without the label every bridge collapses into
-  one bucket and a healthy fleet reads as a double-submitter. The Helm chart's
+  one bucket and a healthy deployment reads as a double-submitter. The Helm chart's
   ServiceMonitor does not add one; use `metrics.serviceMonitor.relabelings`, or
   stamp it in a static scrape config.
 

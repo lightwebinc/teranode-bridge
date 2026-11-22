@@ -26,7 +26,7 @@ import (
 // Addrs is a FAILOVER list, not a pool. With slot identity the submit targets
 // are the tunnel's per-side slot inners ([sideA]:port, [sideB]:port), and an
 // A→B failover moves delivery to the other side while this submitter would
-// otherwise keep dialling the dead one forever, the customer-side half of
+// otherwise keep dialling the dead one forever, the consumer-side half of
 // "submit inherits STE mobility" that a single static address cannot provide.
 // The dialer is sticky on whichever address last worked (submits must not flap
 // between edges on transient blips) and advances to the next address only when

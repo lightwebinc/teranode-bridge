@@ -39,6 +39,16 @@
 //     next endpoint, then salvaged as one retry batch (counted failed when
 //     retries are off).
 //
+// # Booking
+//
+// A transaction is booked rejected only on a VERDICT: an error line that names
+// it with a final failure (invalid, conflicting, a double spend). Nothing else
+// is a verdict. A member still waiting on its parent or on block assembly when
+// the retries run out (at once, with retries off), and every member of a batch
+// whose endpoint errored, could not be reached, answered a status with no
+// per-member report or kept rate-limiting, is booked failed: the cluster never
+// refused it, and it may be perfectly valid.
+//
 // Bytes handed to Enqueue are copied immediately: lane slices alias the
 // reader's buffer and are only valid until the next read.
 package txpipe
@@ -503,15 +513,17 @@ func (p *Pipe) submit(ctx context.Context, b *batch) {
 			p.accepted.Add(n)
 			return
 
-		case strings.HasPrefix(body, partialPrefix) && (status == http.StatusInternalServerError || p.namesMember(body)):
-			// Partial failure, WHATEVER the status: propagation validates every
+		case strings.HasPrefix(body, partialPrefix) && p.namesMember(body):
+			// A 500 whose body names no member has no per-member report and
+			// falls to the refusal path below: failover, then the retry
+			// ladder, then failed. Partial failure, WHATEVER the status: propagation validates every
 			// member independently and accepts the good ones, then reports the
 			// batch with the first client error among the failures (422 for a
 			// missing parent, 409 for a conflict, 400 for an invalid tx), or 500
 			// when a server fault is among them. Only a 500 used to be read this
 			// way; a 422 fell to the refusal path below, which re-sent all 512
-			// members six times over the retry ladder and then booked every one
-			// of them rejected. One orphan in a batch cost the cluster ~3000
+			// members six times over the retry ladder and then wrote every one
+			// of them off. One orphan in a batch cost the cluster ~3000
 			// re-validations of accepted transactions, at exactly the moment it
 			// was already behind (measured: a 20k tx/s lab run collapsed into
 			// 422 storms within seconds of its first orphan).
@@ -599,33 +611,18 @@ func (p *Pipe) namesMember(body string) bool {
 
 // settlePartial parses a partial-failure body's error lines, retries the named
 // txids that are waiting on a parent, books other named failures rejected, and
-// counts everything else accepted.
+// counts everything else accepted. With retries off, a member that is waiting
+// has no ladder to wait on and is booked failed: it was not refused.
 //
 // Attribution is not guaranteed: an error line may name no batch member (a
 // parse error before any txid was read, or a message quoting a foreign hash).
 // Counting the remainder accepted would then overstate delivery, so any
 // unattributed error line is counted as an UNATTRIBUTED failure and subtracted
 // from the accepted remainder. The counter exists so an operator can see that
-// the batch's outcome was partly unknowable rather than silently good.
+// the batch's outcome was partly unknowable rather than silently good. A
+// retry's answer is read by the same rule (see attribute).
 func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
-	mine := make(map[string]struct{}, len(b.jobs))
-	for _, j := range b.jobs {
-		mine[j.id.Display()] = struct{}{}
-	}
-
-	failedIDs := make(map[string]bool) // txid -> retryable (missing parent, threshold exceeded)
-	unattributed := 0
-	for _, line := range strings.Split(body, "\n") {
-		id, ok := p.subjectTxID(line)
-		if !ok {
-			continue // not a per-transaction error line
-		}
-		if _, ours := mine[id]; ours {
-			failedIDs[id] = isRetryable(line)
-			continue
-		}
-		unattributed++
-	}
+	failedIDs, unattributed := p.attribute(body, b.jobs)
 
 	var toRetry []job
 	final := 0
@@ -655,10 +652,10 @@ func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
 	p.accepted.Add(uint64(ok))
 
 	if p.cfg.RetryAttempts <= 0 || len(toRetry) == 0 {
-		// Error lines that matched no batch member (parse errors, foreign
-		// txids in messages) have no job to retry; they are counted against
-		// the batch as rejected only when they named one of ours.
-		p.rejected.Add(uint64(len(toRetry)))
+		// With retries off, a member waiting on its parent or on block
+		// assembly is left waiting. No verdict named it, so it is failed,
+		// not rejected.
+		p.failed.Add(uint64(len(toRetry)))
 		return
 	}
 	p.wg.Add(1)
@@ -666,6 +663,31 @@ func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
 		defer p.wg.Done()
 		p.retryBatch(ctx, toRetry)
 	}()
+}
+
+// attribute reads a partial-failure body against the members of the request
+// it answers, a first batch or a retry batch alike. Each error line about a
+// member records whether that member's failure is retryable (missing parent,
+// threshold exceeded); each error line about a transaction that is NOT a
+// member counts as unattributed, an outcome nobody can know.
+func (p *Pipe) attribute(body string, members []job) (named map[string]bool, unattributed int) {
+	mine := make(map[string]struct{}, len(members))
+	for _, j := range members {
+		mine[j.id.Display()] = struct{}{}
+	}
+	named = make(map[string]bool) // txid -> retryable
+	for _, line := range strings.Split(body, "\n") {
+		id, ok := p.subjectTxID(line)
+		if !ok {
+			continue // not a per-transaction error line
+		}
+		if _, ours := mine[id]; ours {
+			named[id] = isRetryable(line)
+			continue
+		}
+		unattributed++
+	}
+	return named, unattributed
 }
 
 // subjectTxID returns the transaction an error line is ABOUT.
@@ -709,7 +731,7 @@ func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 	p.retried.Add(uint64(len(jobs)))
 	// The ladder has to outlast the slowest parent, not the typical one: under a
 	// 500 tx/s soak a burst of 76 children (in 13 batches) stayed 422 past the
-	// old 25/100/400 ms ladder and was booked rejected, losing every one of them.
+	// old 25/100/400 ms ladder and ran out of retries, losing every one of them.
 	// Waiting longer costs a goroutine; giving up costs the transaction.
 	delays := []time.Duration{25 * time.Millisecond, 100 * time.Millisecond, 400 * time.Millisecond, 1600 * time.Millisecond, 3200 * time.Millisecond}
 	pending := jobs
@@ -746,17 +768,14 @@ func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 			p.accepted.Add(uint64(len(pending)))
 			return
 
-		case strings.HasPrefix(respBody, partialPrefix) && (status == http.StatusInternalServerError || p.namesMember(respBody)):
+		case strings.HasPrefix(respBody, partialPrefix) && p.namesMember(respBody):
 			// Any status: only the transactions the body still NAMES are
 			// outstanding; the rest of the retry batch landed and are booked as
-			// recovered. Of the named, only those waiting on a parent stay in
-			// the ladder; the rest are final and leave it now.
-			named := make(map[string]bool)
-			for _, line := range strings.Split(respBody, "\n") {
-				if id, ok := p.subjectTxID(line); ok {
-					named[id] = isRetryable(line)
-				}
-			}
+			// recovered, less one for each line about a transaction outside
+			// the retry batch (unattributed, as on a first submission). Of the
+			// named, only those waiting on a parent stay in the ladder; the
+			// rest are final and leave it now.
+			named, unattributed := p.attribute(respBody, pending)
 			next := pending[:0:0]
 			final := 0
 			for _, j := range pending {
@@ -769,7 +788,13 @@ func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 					final++
 				}
 			}
-			if ok := len(pending) - len(next) - final; ok > 0 {
+			if unattributed > 0 {
+				p.unattributed.Add(uint64(unattributed))
+				p.log.Warn("txpipe: retry error lines name no member of the retry batch; outcome unknown for that many txs",
+					"count", unattributed, "batch_txs", len(pending), "body", firstLine(respBody))
+			}
+			// Never let the unknown count inflate accepted.
+			if ok := len(pending) - len(next) - final - unattributed; ok > 0 {
 				p.retryAccepted.Add(uint64(ok))
 				p.accepted.Add(uint64(ok))
 			}
@@ -785,15 +810,28 @@ func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 		case status == http.StatusUnprocessableEntity:
 			continue // every member still waiting on a parent
 
+		case status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout:
+			// A proxy's transient refusal, as a transport error: the ladder
+			// tries again, and books failed only when it runs out.
+			continue
+
 		default:
-			p.rejected.Add(uint64(len(pending)))
+			// A status with no per-member report (a 5xx, a bare 4xx, a
+			// proxy's answer) is the endpoint failing, not the cluster
+			// judging these transactions: no verdict, so failed.
+			p.failed.Add(uint64(len(pending)))
+			p.log.Warn("txpipe: retry batch refused", "endpoint", ep, "status", status,
+				"txs", len(pending), "body", firstLine(respBody), "booked", "failed")
 			return
 		}
 	}
 
 	if len(pending) > 0 {
-		p.rejected.Add(uint64(len(pending)))
-		p.log.Warn("txpipe: retries exhausted", "txs", len(pending))
+		// Still waiting when the ladder ran out: on a parent, on block
+		// assembly, or on an endpoint that would not answer. Nothing refused
+		// them, so they are failed, not rejected.
+		p.failed.Add(uint64(len(pending)))
+		p.log.Warn("txpipe: retries exhausted", "txs", len(pending), "booked", "failed")
 	}
 }
 

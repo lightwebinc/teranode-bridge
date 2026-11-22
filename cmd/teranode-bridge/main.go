@@ -100,7 +100,7 @@ func main() {
 		submitter   = flag.Bool("submitter", true, "hold the submitter role for this cluster; exactly one bridge per class should")
 		submitProbe = flag.String("submitter-probe", "", "primary bridge /readyz URL; set on a STANDBY (-submitter=false) to auto-promote when the primary dies and demote when it returns")
 
-		bcSecurity = flag.Int("blockchain-security-level", 0, "transport security for the blockchain gRPC connection, mirroring Teranode's security_level_grpc: 0 plaintext (upstream default), 1 TLS WITHOUT verifying the server (upstream calls this MITM-exploitable by design), 2/3 TLS presenting a client certificate and verifying the server against a CA. security_level_grpc is GLOBAL cluster-side, so a cluster running any non-zero level cannot be reached by a plaintext dial at all; and only the reverse path fails, which reads as an endless subscribe retry while delivery keeps working")
+		bcSecurity = flag.Int("blockchain-security-level", 0, "transport security for the blockchain gRPC connection, mirroring Teranode's security_level_grpc: 0 plaintext (upstream default), 1 TLS WITHOUT verifying the server (upstream calls this MITM-exploitable by design; never the default, and warned at startup), 2/3 TLS presenting a client certificate and verifying the server against a CA. security_level_grpc is GLOBAL cluster-side, so a cluster running any non-zero level cannot be reached by a plaintext dial at all; and only the reverse path fails, which reads as an endless subscribe retry while delivery keeps working")
 		bcCACert   = flag.String("blockchain-ca-cert", "", "CA certificate that signs the cluster's gRPC server cert (levels 2-3)")
 		bcKeyFile  = flag.String("blockchain-api-key-file", "", "file holding the cluster's grpc_admin_api_key, sent as x-api-key on every blockchain gRPC call. Teranode v0.16.1 and later refuse every blockchain method but Health without it (Unauthenticated, which reads as an endless subscribe retry while delivery keeps working). Read once at start, surrounding whitespace trimmed; a file that holds nothing is refused at startup. Unset sends no key, for older clusters")
 		bcCert     = flag.String("blockchain-cert", "", "client certificate presented to the cluster (levels 2-3)")
@@ -129,7 +129,7 @@ func main() {
 		txInflight   = flag.Int("tx-inflight", 4, "concurrent batch submissions in flight")
 		txBuilders   = flag.Int("tx-builders", 4, "parallel batch builders (power of two, max 16)")
 		txQueue      = flag.Int("tx-queue", 8192, "transactions the pipe holds before backpressure blocks the lane read (0 = 8192). This is what absorbs the cluster's stall at a block boundary: measured at 20k tx/s the pipe sat at its 8192 ceiling for seconds around each block, the lane stopped reading, and the edge shed what it could not queue. Size it to stall-seconds x rate; memory is roughly that many transactions")
-		txRetries    = flag.Int("tx-retries", 6, "per-tx retries for failures that resolve with time (missing parent, THRESHOLD_EXCEEDED), on a 25ms..3.2s ladder (6 = ~8.5s); 0 = off")
+		txRetries    = flag.Int("tx-retries", 6, "per-tx retries for failures that resolve with time (missing parent, THRESHOLD_EXCEEDED), on a 25ms..3.2s ladder (6 = ~8.5s); a transaction still waiting after the last is counted failed, not rejected; 0 = off")
 
 		metricsAddr    = flag.String("metrics-addr", "[::]:9146", "HTTP listener for /metrics, /health*, /healthz, /readyz, /loglevel, /debug/pprof (empty = off)")
 		legacyPrefix   = flag.Bool("metrics-legacy-prefix", false, "also emit every pre-existing series under the old btb_ name alongside teranode_bridge_, for a dashboard still on the btb_ names")
@@ -142,7 +142,7 @@ func main() {
 		traceCollector = flag.String("tracing-collector-url", "http://localhost:4318", "OTLP HTTP collector, matching Teranode's tracing_collector_url")
 		traceSample    = flag.Float64("tracing-sample-rate", 0.01, "head sampling ratio for root spans, matching Teranode's tracing_SampleRate. Child spans inherit the parent decision (ParentBased), so a sampled cluster trace stays sampled across the bridge")
 		logLevel       = flag.String("log-level", "info", "debug|info|warn|error")
-		logFormat      = flag.String("log-format", "text", "log encoding: text (stderr) or json (stdout, the fleet aggregation contract)")
+		logFormat      = flag.String("log-format", "text", "log encoding: text (stderr) or json (stdout, one object per line for a log collector)")
 		debug          = flag.Bool("debug", false, "deprecated alias for -log-level=debug")
 		instanceID     = flag.String("instance-id", "", "service.instance.id for logs and metrics (default: hostname)")
 	)
@@ -256,8 +256,8 @@ func main() {
 			os.Exit(1)
 		}
 		if err := probeHealth(ctx, propagation); err != nil {
-			// Not fatal: the cluster may still be starting. Failures stay
-			// visible in the pipe's failed/rejected counters.
+			// Not fatal: the cluster may still be starting. A cluster that
+			// stays unreachable shows in the pipe's failed counter.
 			log.Warn("propagation health check failed at startup", "err", err)
 		}
 	}

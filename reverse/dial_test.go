@@ -105,6 +105,33 @@ func TestSecurityLevels(t *testing.T) {
 	}
 }
 
+// TestUnverifiedTLSIsAnExplicitOptIn pins how the one configuration that skips
+// server verification is reached: never by default (the zero TLSConfig, the
+// -blockchain-security-level default, is plaintext), only by asking for
+// security level 1, and never quietly: New warns at startup whenever level 1
+// is in use, with or without an API key.
+func TestUnverifiedTLSIsAnExplicitOptIn(t *testing.T) {
+	c, err := TLSConfig{}.credentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Info().SecurityProtocol == "tls" {
+		t.Fatal("the zero TLSConfig is TLS; the default must be plaintext, level 0")
+	}
+	for _, level := range []int{0, 1} {
+		var out strings.Builder
+		sub, err := New(Config{BlockchainAddr: "127.0.0.1:1", TLS: TLSConfig{SecurityLevel: level}},
+			registry.New(time.Minute, 16), nil, slog.New(slog.NewTextHandler(&out, nil)))
+		if err != nil {
+			t.Fatalf("level %d: %v", level, err)
+		}
+		_ = sub.Close()
+		if warned := strings.Contains(out.String(), "does not verify the server"); warned != (level == 1) {
+			t.Errorf("level %d: warned %v, want %v: %q", level, warned, level == 1, out.String())
+		}
+	}
+}
+
 // TestSecurityLevelMisconfigurationFailsAtDial pins that a bad level or missing
 // file is refused when the bridge starts, not at handshake time. A TLS error
 // surfacing later reads like a cluster fault; refusing here names the flag.

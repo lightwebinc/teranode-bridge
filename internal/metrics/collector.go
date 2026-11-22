@@ -100,7 +100,7 @@ var (
 		"Objects recognised as already seen: re-delivery after a failover or reconnect, or our own echo returning.", nil)
 
 	submitTotal = newPair("submit_total",
-		"Transactions handed to the cluster's propagation service, by outcome. `rejected` is the cluster refusing on merits (after any retries); `failed` is transport or server fault.", []string{"outcome"})
+		"Transactions handed to the cluster's propagation service, by outcome. `accepted` = taken, or already known. `rejected` = a verdict: an error line naming the transaction with a final failure (invalid, conflicting, a double spend); never retried. `failed` = no verdict: the endpoint errored, could not be reached, answered with no per-transaction report or kept rate-limiting, or the transaction was still waiting (on a parent, on block assembly) when the retries ran out; it may be perfectly valid.", []string{"outcome"})
 
 	pipeEnqueued = newModern("txpipe_enqueued_total",
 		"Transactions accepted into the pipe. Subtract the submit outcomes to see what is still in flight.", nil)

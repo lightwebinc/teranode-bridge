@@ -34,6 +34,8 @@ endless "blockchain subscribe failed, retrying".
 	1  TLS, and the CLIENT SKIPS VERIFICATION of the server certificate.
 	   Upstream's own comment calls this MITM-exploitable by design; it is an
 	   operator-opted-in mode for controlled networks, not a secure default.
+	   The bridge never selects it unasked and warns at startup when it is
+	   selected (unverifiedServerTLS).
 	2  TLS; the server accepts any client certificate. Client-side this means
 	   presenting a certificate AND verifying the server against a CA.
 	3  TLS; the server requires and verifies the client certificate. The CLIENT
@@ -83,13 +85,9 @@ func (t TLSConfig) credentials() (credentials.TransportCredentials, error) {
 
 	case 1:
 		// Encrypt the channel without verifying the server. Deliberately
-		// matching upstream, deliberately loud in the docs: this stops passive
-		// eavesdropping and nothing else.
-		return credentials.NewTLS(&tls.Config{
-			//nolint:gosec // G402: InsecureSkipVerify mirrors upstream's config-gated level 1.
-			InsecureSkipVerify: true,
-			MinVersion:         tls.VersionTLS12,
-		}), nil
+		// matching upstream, deliberately loud in the docs and at startup
+		// (New warns): this stops passive eavesdropping and nothing else.
+		return credentials.NewTLS(unverifiedServerTLS()), nil
 
 	case 2, 3:
 		if t.CACertFile == "" || t.CertFile == "" || t.KeyFile == "" {
@@ -119,6 +117,20 @@ func (t TLSConfig) credentials() (credentials.TransportCredentials, error) {
 
 	default:
 		return nil, fmt.Errorf("unknown security level %d (want 0-3)", t.SecurityLevel)
+	}
+}
+
+// unverifiedServerTLS is the client side of security level 1: TLS that does
+// NOT verify the server's certificate, as Teranode's own level 1 client does.
+// It is never a default. Only -blockchain-security-level 1 reaches it, and New
+// warns at startup whenever it does. Any host on the path can present a
+// certificate and be believed, so it stops passive eavesdropping and nothing
+// else; levels 2 and 3 verify the server against a CA.
+func unverifiedServerTLS() *tls.Config {
+	return &tls.Config{
+		//nolint:gosec // G402: security level 1 is the operator's explicit opt-in, mirroring upstream.
+		InsecureSkipVerify: true,
+		MinVersion:         tls.VersionTLS12,
 	}
 }
 

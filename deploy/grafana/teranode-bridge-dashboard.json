@@ -1455,7 +1455,7 @@
       "id": 21,
       "type": "timeseries",
       "title": "Submit outcomes",
-      "description": "rejected = the cluster refusing on merits. failed = transport or server fault.",
+      "description": "rejected = a verdict: an error line naming the transaction as invalid, conflicting or a double spend. failed = no verdict: the endpoint errored, was unreachable or kept rate-limiting, or the transaction was still waiting (parent, block assembly) when the retries ran out.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
