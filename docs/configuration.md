@@ -229,7 +229,7 @@ Three contract details worth knowing:
   convention _brackets_: messages such as `duplicate input found: <hash>:<n>`
   quote a second hash that is not the subject, and counting it would book a
   phantom failure against a batch member that in fact succeeded. Any error line
-  naming no member of the batch it answers is counted in
+  naming no member of the batch it answers, a first batch or a retry batch, is counted in
   `teranode_bridge_txpipe_unattributed_total` and excluded from `accepted`, because that
   batch's outcome is partly unknown rather than good.
 - **Rate limiting**: propagation's HTTP limiter is per source IP **and** per

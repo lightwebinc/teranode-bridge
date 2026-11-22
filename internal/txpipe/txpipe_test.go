@@ -648,6 +648,60 @@ func TestNoVerdictIsNeverRejected(t *testing.T) {
 	}
 }
 
+// TestRetryErrorLineNamingNoMemberIsUnattributed pins the attribution rule on
+// the retry ladder, the same as on a first submission: an error line in a
+// retry's answer that names a transaction outside the retry batch makes that
+// much of the retry's outcome UNKNOWN. It is counted unattributed and taken
+// off the members booked recovered; it never counts as accepted.
+func TestRetryErrorLineNamingNoMemberIsUnattributed(t *testing.T) {
+	a, b, c := rawTx([32]byte{81}, 81), rawTx([32]byte{82}, 82), rawTx([32]byte{83}, 83)
+	aID, bID := txidOf(t, a).Display(), txidOf(t, b).Display()
+	for _, tc := range []struct{ name, outsider string }{
+		{"a foreign hash", strings.Repeat("ab", 32)},
+		{"a member of the first batch, not of the retry", aID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var n atomic.Int64
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.WriteHeader(http.StatusInternalServerError)
+				if n.Add(1) == 1 {
+					// The first batch: b waits on its parent, a and c land.
+					_, _ = fmt.Fprintf(w, "Failed to process transactions:\n"+
+						"TX_MISSING_PARENT (34): [ProcessTransaction][%s] missing parent tx\n", bID)
+					return
+				}
+				// The retry of b: its answer names only a transaction outside
+				// the retry batch.
+				_, _ = fmt.Fprintf(w, "Failed to process transactions:\n"+
+					"TX_INVALID (69): [ProcessTransaction][%s] script failed\n", tc.outsider)
+			}))
+			defer srv.Close()
+
+			p, err := New(Config{
+				Endpoints: []string{srv.URL},
+				BatchTxs:  10, Linger: 50 * time.Millisecond, Inflight: 1, Builders: 1, RetryAttempts: 2,
+			}, testLogger())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go func() { _ = p.Run(ctx) }()
+			for _, tx := range [][]byte{a, b, c} {
+				if err := p.Enqueue(ctx, tx, txidOf(t, tx)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			waitFor(t, func() bool { s := p.Stats(); return s.Accepted+s.Rejected+s.Failed+s.Unattributed == 3 })
+			if s := p.Stats(); s.Accepted != 2 || s.Unattributed != 1 || s.RetryAccepted != 0 || s.Rejected != 0 || s.Failed != 0 {
+				t.Fatalf("accepted %d unattributed %d retry_accepted %d rejected %d failed %d, want 2 1 0 0 0",
+					s.Accepted, s.Unattributed, s.RetryAccepted, s.Rejected, s.Failed)
+			}
+		})
+	}
+}
+
 // TestPartial422SettlesPerMember pins the real propagation shape: members are
 // validated independently, the good ones are accepted, and the batch answers
 // with the FIRST client error among the failures (here 422, a missing parent)

@@ -237,7 +237,7 @@ one txid.
 | Answer | Outcome |
 | --- | --- |
 | `200` | every member `accepted` (an already-known transaction is accepted too) |
-| a `Failed to process transactions:` body at status `500`, or at any status with an error line that names a transaction (a bracketed txid) | partial failure: the members the error lines name are settled individually (missing parent and `THRESHOLD_EXCEEDED` go on the retry ladder, and are `failed` if it runs out or `-tx-retries` is `0`; the rest are `rejected`); the unnamed members are `accepted`, less one for each error line that names a transaction outside the batch, whose outcome is unknown (`teranode_bridge_txpipe_unattributed_total`) |
+| a `Failed to process transactions:` body at status `500`, or at any status with an error line that names a transaction (a bracketed txid) | partial failure: the members the error lines name are settled individually (missing parent and `THRESHOLD_EXCEEDED` go on the retry ladder, and are `failed` if it runs out or `-tx-retries` is `0`; the rest are `rejected`); the unnamed members are `accepted`, less one for each error line that names a transaction outside the batch, whose outcome is unknown (`teranode_bridge_txpipe_unattributed_total`). A retry batch's answer is settled by the same rules |
 | `429` | nothing was processed; the whole batch is retried after a backoff, and is `failed` if the backoff runs out |
 | transport error or any other status, including a `Failed to process transactions:` body that names no transaction at a status other than `500` | one failover attempt on the next endpoint, then the whole batch is salvaged as one retry batch; `failed` when `-tx-retries` is `0`, when the retry batch is refused the same way, or when the ladder runs out |
 

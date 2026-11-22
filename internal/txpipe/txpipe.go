@@ -617,26 +617,10 @@ func (p *Pipe) namesMember(body string) bool {
 // Counting the remainder accepted would then overstate delivery, so any
 // unattributed error line is counted as an UNATTRIBUTED failure and subtracted
 // from the accepted remainder. The counter exists so an operator can see that
-// the batch's outcome was partly unknowable rather than silently good.
+// the batch's outcome was partly unknowable rather than silently good. A
+// retry's answer is read by the same rule (see attribute).
 func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
-	mine := make(map[string]struct{}, len(b.jobs))
-	for _, j := range b.jobs {
-		mine[j.id.Display()] = struct{}{}
-	}
-
-	failedIDs := make(map[string]bool) // txid -> retryable (missing parent, threshold exceeded)
-	unattributed := 0
-	for _, line := range strings.Split(body, "\n") {
-		id, ok := p.subjectTxID(line)
-		if !ok {
-			continue // not a per-transaction error line
-		}
-		if _, ours := mine[id]; ours {
-			failedIDs[id] = isRetryable(line)
-			continue
-		}
-		unattributed++
-	}
+	failedIDs, unattributed := p.attribute(body, b.jobs)
 
 	var toRetry []job
 	final := 0
@@ -677,6 +661,31 @@ func (p *Pipe) settlePartial(ctx context.Context, b *batch, body string) {
 		defer p.wg.Done()
 		p.retryBatch(ctx, toRetry)
 	}()
+}
+
+// attribute reads a partial-failure body against the members of the request
+// it answers, a first batch or a retry batch alike. Each error line about a
+// member records whether that member's failure is retryable (missing parent,
+// threshold exceeded); each error line about a transaction that is NOT a
+// member counts as unattributed, an outcome nobody can know.
+func (p *Pipe) attribute(body string, members []job) (named map[string]bool, unattributed int) {
+	mine := make(map[string]struct{}, len(members))
+	for _, j := range members {
+		mine[j.id.Display()] = struct{}{}
+	}
+	named = make(map[string]bool) // txid -> retryable
+	for _, line := range strings.Split(body, "\n") {
+		id, ok := p.subjectTxID(line)
+		if !ok {
+			continue // not a per-transaction error line
+		}
+		if _, ours := mine[id]; ours {
+			named[id] = isRetryable(line)
+			continue
+		}
+		unattributed++
+	}
+	return named, unattributed
 }
 
 // subjectTxID returns the transaction an error line is ABOUT.
@@ -760,14 +769,11 @@ func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 		case strings.HasPrefix(respBody, partialPrefix) && (status == http.StatusInternalServerError || p.namesMember(respBody)):
 			// Any status: only the transactions the body still NAMES are
 			// outstanding; the rest of the retry batch landed and are booked as
-			// recovered. Of the named, only those waiting on a parent stay in
-			// the ladder; the rest are final and leave it now.
-			named := make(map[string]bool)
-			for _, line := range strings.Split(respBody, "\n") {
-				if id, ok := p.subjectTxID(line); ok {
-					named[id] = isRetryable(line)
-				}
-			}
+			// recovered, less one for each line about a transaction outside
+			// the retry batch (unattributed, as on a first submission). Of the
+			// named, only those waiting on a parent stay in the ladder; the
+			// rest are final and leave it now.
+			named, unattributed := p.attribute(respBody, pending)
 			next := pending[:0:0]
 			final := 0
 			for _, j := range pending {
@@ -780,7 +786,13 @@ func (p *Pipe) retryBatch(ctx context.Context, jobs []job) {
 					final++
 				}
 			}
-			if ok := len(pending) - len(next) - final; ok > 0 {
+			if unattributed > 0 {
+				p.unattributed.Add(uint64(unattributed))
+				p.log.Warn("txpipe: retry error lines name no member of the retry batch; outcome unknown for that many txs",
+					"count", unattributed, "batch_txs", len(pending), "body", firstLine(respBody))
+			}
+			// Never let the unknown count inflate accepted.
+			if ok := len(pending) - len(next) - final - unattributed; ok > 0 {
 				p.retryAccepted.Add(uint64(ok))
 				p.accepted.Add(uint64(ok))
 			}
